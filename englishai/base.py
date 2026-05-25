@@ -43,9 +43,14 @@ class TreeNode:
 def gender(eq):
     male = ["father", "son", "bob", "brother", "john", "he"]
     female = ["mother", "daughter", "sister", "lucy", "mary", "she", "girl-friend", "sister"]
-    if eq.name in male:
+    name = None
+    if isinstance(eq, str):
+        name = eq
+    else:
+        name = eq.name
+    if name in male:
         return "male"
-    elif eq.name in female:
+    elif name in female:
         return "female"
     return "unknown"
 def replace(equation, find, r):
