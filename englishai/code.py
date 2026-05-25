@@ -1022,6 +1022,9 @@ def infer_equation2(split, funcs):
         a = actor(split[1])["tree"]
         v = parse_adjective(split[2])
         return TreeNode("lambda", [TreeNode("A"), TreeNode(v, [a]), TreeNode("yes"), TreeNode("no")])
+    if funcs == ["who", "aux", "actor"]:
+        a = actor(split[2])["tree"]
+        return TreeNode("lambda", [TreeNode("A"), TreeNode("equal", [TreeNode("A"), a]), TreeNode("A"), TreeNode("DELETE")])
     if funcs == ["who", "verb", "actor"]:
         v = parse_verb(split[1])["root"]
         a = actor(split[2])["tree"]

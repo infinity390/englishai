@@ -32,9 +32,6 @@ class TreeNode:
     def __init__(self, name, children=None):
         self.name = name
         self.children = children if children else []
-        self.gender = [True, False]
-        self.emotional_state = [True, False]
-        self.living_state = [True]
     def fx(self, name):
         return TreeNode(name, [self])
     def __repr__(self):

@@ -2,6 +2,8 @@ from .base import *
 def actor_to_phrase(node, obj_form=False):
     if node is None:
         return ""
+    if node.name in ["no", "yes"]:
+        return node.name
     if node.name in ["i", "she", "he", "they", "we"] and obj_form:
         return {"i":"me", "she":"her", "he":"him", "they":"them", "we":"us"}[node.name]
     allowed_relations = {
@@ -10,6 +12,9 @@ def actor_to_phrase(node, obj_form=False):
         "friend",
         "boy-friend",
         "girl-friend",
+        "sister",
+        "brother",
+        "daughter",
         "son"
     }
     allowed_pronouns = {
