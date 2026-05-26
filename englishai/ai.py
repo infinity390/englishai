@@ -28,25 +28,18 @@ def answer(question, conversation=""):
     a = [code(item) for item in c]
     q = code(question)
     for item in a:
+        table.process_entry()
         table.create_new_nodes = False
+        orig = copy.deepcopy(table)
         out = table.equate(item)
         if out is None:
-            for item2 in assume_gender(table):
-                orig = copy.deepcopy(table)
-                out2 = table.equate(item2)
-                if out2 is None:
-                    continue
-                out = table.equate(item)
-                if out is not None:
-                    break
-                else:
-                    table = orig
-        if out is None:
+            table = orig
             table.create_new_nodes = True
             out = table.equate(item)
         if out is None:
             return None
     table.create_new_nodes = False
+    table.process_entry()
     out = table.lambda_compute(q)
     if not isinstance(out, list):
         out = [out]

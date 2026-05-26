@@ -24,7 +24,7 @@ class Table:
         self.table_entry_list = {}
         self.curr = 0
         self.create_new_nodes = True
-    def find_human(self, curr_id=None, step=[], create_new=True):
+    def find_human(self, curr_id=None, step=[], create_new=True, create_new2=True):
         if create_new:
             create_new = self.create_new_nodes
         item = None
@@ -43,15 +43,24 @@ class Table:
                 for key, element in self.table_entry_list.items():
                     if key == curr_id:
                         continue
-                    a = self.find_human(key, ["mother"], False)
-                    b = self.find_human(curr_id, ["mother"], False)
-                    c = self.find_human(key, ["father"], False)
-                    d = self.find_human(curr_id, ["father"], False)
+                    a = self.find_human(key, ["mother"], False, False)
+                    b = self.find_human(curr_id, ["mother"], False, False)
+                    c = self.find_human(key, ["father"], False, False)
+                    d = self.find_human(curr_id, ["father"], False, False)
                     if a is not None and b is not None and a==b and\
                        c is not None and d is not None and c==d and\
                        [True if item3 == "brother" else False] == element.gender:
                         if key not in out:
                             out.append(key)
+                            
+                if item3 == "sister":
+                    self.table_entry_list[curr_id].sister += out
+                    self.table_entry_list[curr_id].sister = list(set(self.table_entry_list[curr_id].sister))
+                    out = self.table_entry_list[curr_id].sister
+                else:
+                    self.table_entry_list[curr_id].brother += out
+                    self.table_entry_list[curr_id].brother = list(set(self.table_entry_list[curr_id].brother))
+                    out = self.table_entry_list[curr_id].brother
                 if len(out) == 0 and create_new:
                     person = self.create()
                     self.table_entry_list[person].gender = [True if item3 == "brother" else False]
@@ -69,7 +78,11 @@ class Table:
                         self.table_entry_list[person_a].gender = [False]
                         self.table_entry_list[person].mother = person_a
                         self.table_entry_list[curr_id].mother = person_a
-                    return person
+                    if item3 == "sister":
+                        self.table_entry_list[curr_id].sister.append(person)
+                    else:
+                        self.table_entry_list[curr_id].brother.append(person)
+                    return self.find_human(person, step[1:], create_new)
                 if len(out) == 1:
                     return self.find_human(out[0], step[1:], create_new)
                 else:
@@ -81,39 +94,55 @@ class Table:
                     if key == curr_id:
                         continue
                     for item2 in ["mother", "father"]:
-                        if self.find_human(key, [item2], False) == curr_id and [True if item3 == "son" else False] == element.gender:
+                        if self.find_human(key, [item2], False, False) == curr_id and [True if item3 == "son" else False] == element.gender:
                             out.append(key)
+                if item3 == "daughter":
+                    self.table_entry_list[curr_id].daughter += out
+                    self.table_entry_list[curr_id].daughter = list(set(self.table_entry_list[curr_id].daughter))
+                    out = self.table_entry_list[curr_id].daughter
+                else:
+                    self.table_entry_list[curr_id].son += out
+                    self.table_entry_list[curr_id].son = list(set(self.table_entry_list[curr_id].son))
+                    out = self.table_entry_list[curr_id].son
                 if len(out) == 0 and create_new:
                     if item.gender == [True]:
                         person = self.create()
                         self.table_entry_list[person].gender = [True if item3 == "son" else False]
                         self.table_entry_list[person].father = curr_id
-                        return person
+                        if item3 == "daughter":
+                            self.table_entry_list[curr_id].daughter.append(person)
+                        else:
+                            self.table_entry_list[curr_id].son.append(person)
+                        return self.find_human(person, step[1:], create_new)
                     elif item.gender == [False]:
                         person = self.create()
                         self.table_entry_list[person].gender = [True if item3 == "son" else False]
                         self.table_entry_list[person].mother = curr_id
-                        return person
+                        if item3 == "daughter":
+                            self.table_entry_list[curr_id].daughter.append(person)
+                        else:
+                            self.table_entry_list[curr_id].son.append(person)
+                        return self.find_human(person, step[1:], create_new)
                 if len(out) == 1:
                     return self.find_human(out[0], step[1:], create_new)
                 else:
                     return None
         if step[0] == "father":
-            if item.father is None and create_new:
+            if item.father is None and create_new2:
                 item.father = self.create()
                 self.table_entry_list[item.father].gender = [True]
             if item.father is not None:
                 return self.find_human(item.father, step[1:], create_new)
         if step[0] == "mother":
-            if item.mother is None and create_new:
+            if item.mother is None and create_new2:
                 item.mother = self.create()
                 self.table_entry_list[item.mother].gender = [False]
-            if item.mother is not None:
+            if item.mother is not None and create_new2:
                 return self.find_human(item.mother, step[1:], create_new)
         for key, item in self.table_entry_list.items():
             if step[0] in item.entry:
                 return self.find_human(key, step[1:], create_new)
-        if create_new is False:
+        if not create_new2:
             return None
         curr_id = self.create()
         self.table_entry_list[curr_id].entry = [step[0]]
@@ -131,11 +160,18 @@ class Table:
             root = root.children[0]
         lst.append(root.name)
         lst = lst[::-1]
-        return self.find_human(None,lst)
+        out = self.find_human(None,lst)
+        out = self.normalize_id(out)
+        return out
     def equate_id(self, a, b):
+    
         n = TableEntry()
         p, q = self.table_entry_list[a], self.table_entry_list[b]
         n.entry = list(set(p.entry + q.entry))
+        n.sister = list(set(p.sister + q.sister)-set([a, b]))
+        n.brother = list(set(p.brother + q.brother)-set([a, b]))
+        n.daughter = list(set(p.daughter + q.daughter))
+        n.son = list(set(p.son + q.son))
         n.gender = list(set(p.gender) & set(q.gender))
         n.living_state = p.living_state and q.living_state
         n.killed = list(set(p.killed + q.killed))
@@ -161,6 +197,23 @@ class Table:
     def process_entry(self):
         for key in self.table_entry_list.keys():
             self.table_entry_list[key].process()
+        for key, item in self.table_entry_list.items():
+            self.table_entry_list[key].brother = list(set([self.normalize_id(x) for x in self.table_entry_list[key].brother]))
+            self.table_entry_list[key].sister = list(set([self.normalize_id(x) for x in self.table_entry_list[key].sister]))
+            if key in item.sister:
+                self.table_entry_list[key].sister.remove(key)
+            if key in item.brother:
+                self.table_entry_list[key].brother.remove(key)
+            for key2, item2 in self.table_entry_list.items():
+                if key == key2:
+                    continue
+                if item.father is not None and item2.father is not None and\
+                   item.mother is not None and item2.mother is not None and\
+                   item.father == item2.father and item.mother == item2.mother:
+                    if item2.gender == [True]:
+                        self.table_entry_list[key].brother.append(key2)
+                    elif item2.gender == [False]:
+                        self.table_entry_list[key].sister.append(key2)
     def equate_eq(self, a, b):
         if not valid_actor_eq(a) or not valid_actor_eq(b):
             return None
@@ -176,7 +229,7 @@ class Table:
         new_cat = []
         for item in self.id_system:
             done = True
-            for i in range(new_cat):
+            for i in range(len(new_cat)):
                 if len(set(new_cat[i]) & set(item)) != 0:
                     new_cat[i] += item
                     new_cat[i] = list(set(new_cat[i]))
@@ -320,10 +373,7 @@ class Table:
                 return b
         if eq.name == "kill":
             c = self.equate_verb(eq)
-            orig2 = self.create_new_nodes
-            self.create_new_nodes = False
             d = self.equate_bool_eq(eq.children[1].fx("die"))
-            self.create_new_nodes = orig2
             if c is None or d is None:
                 self = orig
                 return None
@@ -446,6 +496,10 @@ class TableEntry:
         entry=None,
         father=None,
         mother=None,
+        sister=None,
+        brother=None,
+        daughter=None,
+        son=None,
         crush=None,
         killed=None,
         gender=[True, False],
@@ -461,6 +515,10 @@ class TableEntry:
         self.killed = killed if killed else []
         self.alias = entry if entry else []
         self.crush = crush if crush else []
+        self.sister = sister if sister else []
+        self.brother = brother if brother else []
+        self.daughter = daughter if daughter else []
+        self.son = son if son else []
         self.process()
     def process(self):
         for item in self.entry:
@@ -477,6 +535,8 @@ class TableEntry:
         s = line + "\n"
         s += f"| Father           : {self.father}\n"
         s += f"| Mother           : {self.mother}\n"
+        s += f"| Sister           : {self.sister}\n"
+        s += f"| Brother          : {self.brother}\n"
         s += f"| Gender           : {self.gender}\n"
         # s += f"| Emotional State  : {self.emotional_state}\n"
         s += f"| Living State     : {self.living_state}\n"
