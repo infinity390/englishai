@@ -351,12 +351,15 @@ class Table:
             number_lst = []
             for item in eq.children:
                 if item.name == "id":
-                    number_lst.append(int(item.children[0].name))
+                    number_lst.append([int(item.children[0].name)])
                 elif valid_actor_eq(item):
-                    number_lst.append(self.find_id(item))
+                    tmp = self.find_id(item)
+                    if tmp is None:
+                        return None
+                    number_lst.append(tmp)
                 else:
                     return None
-            if number_lst[1] in self.table_entry_list[number_lst[0]].killed:
+            if set(number_lst[1]) <= set(self.table_entry_list[number_lst[0][0]].killed):
                 return True
             return False
         else:
