@@ -359,6 +359,8 @@ class Table:
                     number_lst.append(tmp)
                 else:
                     return None
+            if self.table_entry_list[number_lst[0][0]].killed == []:
+                return False
             if set(number_lst[1]) <= set(self.table_entry_list[number_lst[0][0]].killed):
                 return True
             return False
