@@ -29,13 +29,7 @@ def answer(question, conversation=""):
     q = code(question)
     for item in a:
         table.process_entry()
-        table.create_new_nodes = False
-        orig = copy.deepcopy(table)
         out = table.equate(item)
-        if out is None:
-            table = orig
-            table.create_new_nodes = True
-            out = table.equate(item)
         if out is None:
             return None
     table.create_new_nodes = False

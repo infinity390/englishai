@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="englishai",
-    version="0.2.5",
+    version="0.2.9",
 
     description="Rule-based symbolic English parsing and reasoning engine",
 
