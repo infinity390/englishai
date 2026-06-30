@@ -112,24 +112,18 @@ class Table:
                     self.table_entry_list[curr_id].son = list(set(self.table_entry_list[curr_id].son))
                     out = self.table_entry_list[curr_id].son
                 if len(out) == 0 and create_new:
+                    person = self.create()
                     if item.gender == [True]:
-                        person = self.create()
-                        self.table_entry_list[person].gender = [True if item3 == "son" else False]
                         self.table_entry_list[person].father = curr_id
-                        if item3 == "daughter":
-                            self.table_entry_list[curr_id].daughter.append(person)
-                        else:
-                            self.table_entry_list[curr_id].son.append(person)
-                        out = [person]
                     elif item.gender == [False]:
-                        person = self.create()
-                        self.table_entry_list[person].gender = [True if item3 == "son" else False]
                         self.table_entry_list[person].mother = curr_id
-                        if item3 == "daughter":
-                            self.table_entry_list[curr_id].daughter.append(person)
-                        else:
-                            self.table_entry_list[curr_id].son.append(person)
-                        out = [person]
+                    else:
+                        self.table_entry_list[person].gender = [True if item3 == "son" else False]
+                    if item3 == "daughter":
+                        self.table_entry_list[curr_id].daughter.append(person)
+                    else:
+                        self.table_entry_list[curr_id].son.append(person)
+                    out = [person]
                 out2 = []
                 for person_id in list(set(out)):
                     out2 += self.find_human(person_id, step[1:], create_new)
@@ -167,9 +161,7 @@ class Table:
             root = root.children[0]
         lst.append(root.name)
         lst = lst[::-1]
-        
         out = [self.normalize_id(item) for item in self.find_human(None,lst)]
-        
         return list(set(out))
     def equate_id(self, a, b):
         if a==b:
@@ -214,24 +206,39 @@ class Table:
             for key2, item2 in self.table_entry_list.items():
                 if key == key2:
                     continue
-                if ((item2.father is not None and key == item2.father) or\
-                    (item2.mother is not None and key == item2.mother)) and item2.gender == [True]:
-                    self.table_entry_list[key].son.append(key2)
-                if ((item2.father is not None and key == item2.father) or\
-                    (item2.mother is not None and key == item2.mother)) and item2.gender == [False]:
-                    self.table_entry_list[key].daughter.append(key2)
-                if item.father is not None and item2.father is not None and\
-                   item.mother is not None and item2.mother is not None and\
-                   item.father == item2.father and item.mother == item2.mother:
+                if (
+                    (item2.father is not None and key == item2.father)
+                    or
+                    (item2.mother is not None and key == item2.mother)
+                ):
+                    if item2.gender == [True]:
+                        self.table_entry_list[key].son.append(key2)
+                    elif item2.gender == [False]:
+                        self.table_entry_list[key].daughter.append(key2)
+                if key in item2.son or key in item2.daughter:
+                    if item2.gender == [True]:
+                        if self.table_entry_list[key].father is None:
+                            self.table_entry_list[key].father = key2
+                    elif item2.gender == [False]:
+                        if self.table_entry_list[key].mother is None:
+                            self.table_entry_list[key].mother = key2
+                if (
+                    item.father is not None
+                    and item2.father is not None
+                    and item.mother is not None
+                    and item2.mother is not None
+                    and item.father == item2.father
+                    and item.mother == item2.mother
+                ):
                     if item2.gender == [True]:
                         self.table_entry_list[key].brother.append(key2)
                     elif item2.gender == [False]:
                         self.table_entry_list[key].sister.append(key2)
         for key, item in self.table_entry_list.items():
-            self.table_entry_list[key].brother = list(set([self.normalize_id(x) for x in self.table_entry_list[key].brother]))
-            self.table_entry_list[key].sister = list(set([self.normalize_id(x) for x in self.table_entry_list[key].sister]))
-            self.table_entry_list[key].daughter = list(set([self.normalize_id(x) for x in self.table_entry_list[key].daughter]))
-            self.table_entry_list[key].son = list(set([self.normalize_id(x) for x in self.table_entry_list[key].son]))
+            self.table_entry_list[key].brother = list(set(self.normalize_id(x) for x in item.brother))
+            self.table_entry_list[key].sister = list(set(self.normalize_id(x) for x in item.sister))
+            self.table_entry_list[key].daughter = list(set(self.normalize_id(x) for x in item.daughter))
+            self.table_entry_list[key].son = list(set(self.normalize_id(x) for x in item.son))
     def equate_eq(self, a, b):
         if not valid_actor_eq(a) or not valid_actor_eq(b):
             return None
@@ -478,6 +485,7 @@ class Table:
         out = [item if isinstance(item, TreeNode) else TreeNode(item) for item in self.table_entry_list[number].alias]
         return list(set(out))
     def rm_eq_id(self, eq):
+        #orig = copy.deepcopy(self)
         self.alias_gen()
         id_nodes = collect_id_nodes(eq)
         if not id_nodes:
@@ -502,6 +510,7 @@ class Table:
                     new_node
                 )
             outputs.append(new_eq)
+        #self = orig
         return outputs
     def adjust_id(self):
         for item in self.id_system:
