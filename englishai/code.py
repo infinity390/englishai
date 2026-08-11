@@ -288,7 +288,7 @@ def parse_verb(words):
         "come", "do", "have",
         "walk", "study", "kill", "want",
         "love", "hate", "help",
-        "ate", "went", "gone",
+        "ate", "went", "gone", "told", "tells", "tell",
         "saw", "seen",
         "gave", "given",
         "took", "taken",
@@ -310,6 +310,8 @@ def parse_verb(words):
         "took": ("take", "past"),
         "taken": ("take", "past"),
         "ran": ("run", "past"),
+        "told": ("tell", "past"),
+        "tells": ("tell", "present"),
         "died": ("die", "past"),
         "dies": ("die", "present"),
         "came": ("come", "past"),
@@ -548,69 +550,83 @@ def normalize_synonyms(node):
 def split_sentence(words):
     results = []
     n = len(words)
+
     def valid_given(given, chunk):
         return given == " ".join(chunk)
+
     def valid_actor(chunk):
         try:
             return actor(chunk) is not None
         except:
             return False
+
     def valid_adjective(chunk):
         try:
             return parse_adjective(chunk) is not None
         except:
             return False
+
     def valid_aux(chunk):
         try:
             return aux_verb(chunk) is not None
         except:
             return False
+
     def valid_noun(chunk):
         try:
             return parse_category(chunk) is not None
         except:
             return False
+
     def valid_verb(chunk):
         try:
             return parse_verb(chunk) is not None
         except:
             return False
+
+    # Specific grammar rules (excluding fallback)
     parsers = [
         ("actor", valid_actor),
         ("aux", valid_aux),
         ("verb", valid_verb),
         ("to", lambda x: valid_given("to", x)),
         ("not", lambda x: valid_given("not", x)),
+        ("that", lambda x: valid_given("that", x)),
         ("who", lambda x: valid_given("who", x)),
         ("noun", valid_noun),
-        ("adjective", valid_adjective)
+        ("adjective", valid_adjective),
     ]
+
     def recurse(index, splits, funcs):
         if index >= n:
             for i in range(len(funcs) - 1):
-                if (
-                    funcs[i] == "actor"
-                    and funcs[i + 1] == "actor"
-                ):
+                if funcs[i] == "actor" and funcs[i + 1] == "actor":
                     return
-            results.append((
-                splits[:],
-                funcs[:]
-            ))
+            results.append((splits[:], funcs[:]))
             return
+
         for end in range(index + 1, n + 1):
             chunk = words[index:end]
+            matched_any = False
+
+            # Try all standard grammar parsers
             for name, parser in parsers:
                 if parser(chunk):
+                    matched_any = True
                     splits.append(chunk)
                     funcs.append(name)
-                    recurse(
-                        end,
-                        splits,
-                        funcs
-                    )
+                    recurse(end, splits, funcs)
                     splits.pop()
                     funcs.pop()
+
+            # Fallback: Tag as "sentence" ONLY if no other parser matched this chunk
+            if not matched_any:
+                splits.append(chunk)
+                funcs.append("sentence")
+                recurse(end, splits, funcs)
+                splits.pop()
+                funcs.pop()
+
     recurse(0, [], [])
     return results
 def combine_features(split, funcs):
@@ -695,11 +711,17 @@ def combine_features(split, funcs):
     )
     return result
 def infer_equation2(split, funcs):
+    
+    if funcs == ["actor", "verb", "actor", "that", "sentence"]:
+        a = actor(split[0])["tree"]
+        a2 = actor(split[2])["tree"]
+        eq = code(" ".join(split[4:][0]))
+        if split[1][0] in "tell told tells said says say".split(" "):
+            return TreeNode("convey", [a, a2, eq])
     if split[0] != ["who"] and combine_features(split[:2], funcs[:2])["valid"] is False:
-        
         return None
-
     last_actor = None
+    
     if funcs.count("actor") == 2:
         if len(split)>=3 and funcs[-1] == "actor" and actor(split[-1])["form"] == "subject":
             return None
@@ -785,5 +807,8 @@ def code(sentence):
     if len(out) == 0:        
         return None
     else:
-        out = out[0]
-        return infer_equation(*out)
+        for out2 in out:
+            out3 = infer_equation(*out2)
+            if out3 is not None:
+                return out3
+    return None
