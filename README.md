@@ -83,4 +83,3 @@ CONTEXT: she kills john's father
 QUESTION: is john alive ?
 ANSWER: yes
 ```
-
