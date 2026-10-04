@@ -57,6 +57,13 @@ def parse(s):
                     branch, i = parse_block(i, level2 + 1)
                     branches[text2].extend(branch)
                 result.append(condition)
+            elif text.startswith("ASK "):
+                expr = text[4:]
+                i += 1
+                children, i = parse_block(i, level + 1)
+                result.append(
+                    ("ASK", code(expr), children)
+                )
             else:
                 head, *sentence = text.split(maxsplit=1)
                 if sentence:
@@ -66,6 +73,8 @@ def parse(s):
                 result.append((head, equation))
                 i += 1
         return result, i
+    if not lines:
+        return []
     return parse_block(0, lines[0][0])[0]
 def show(x, level=0):
     space = " " * level
@@ -114,6 +123,14 @@ class Table:
         self.curr = 0
         self.create_new_nodes = True
         s = """
+ASK who is x
+ ANSWER x
+ IF y's mother is x
+  TRUE
+   ANSWER y's mother
+ IF y's father is x
+  TRUE
+   ANSWER y's father
 IF x is mary
  TRUE
   ASSERT x is a girl
@@ -149,20 +166,16 @@ IF x is y's father
    FALSE
 """
         self.rule = parse(s)
-    def find_human(self, node):
-        for key in self.table_entry_list.keys():
-            if node in self.table_entry_list[key].entry:
-                return key
-        out = self.create()
-        self.table_entry_list[out].entry += [node]
-        return out
     def create(self):
         out = TableEntry()
         self.table_entry_list[self.curr] = out
         self.curr = self.curr+1
         return self.curr - 1
-    def find_id(self,eq):
-        return self.normalize_id(self.find_human(eq))
+    def find_id(self,n):
+        lst = self.table_entry_list[n].entry
+        if len(lst) != 0:
+            return lst
+        return []
     def equate_id(self, a, b):
         if a==b:
             return a
@@ -199,7 +212,21 @@ IF x is y's father
                         for item2 in item[1:]:
                             if self.table_entry_list[key2].attr[key] == item2:
                                 self.table_entry_list[key2].attr[key] = item[0]
-        self.id_system = []                        
+        self.id_system = []
+    def ask(self, eq):
+        self.process_all_rule()
+        if eq.name == "who":
+            output = []
+            out = self.create_node(eq.children[0])
+            if out is None:
+                return None
+            for item in self.rule:
+                for item2 in self.table_entry_list.keys():
+                    if out == item2:
+                        continue
+                    output += self.process_rule(item,out,item2)
+            out = list(set(output)-set([0,None]))
+            return [actor_to_phrase(item) for item in out if var_in_eq(item)]
     def process_rule(self, rule, x=None, y=None):
         def helper(lst, x, y):
             out = []
@@ -208,16 +235,35 @@ IF x is y's father
                 item = replace(item, TreeNode("y"), TreeNode(f"d_{y}"))
                 out.append(self.create_node(item))
             return out
+        def helper2(lst, x, y):
+            out = []
+            for item in lst:
+                a, b = self.find_id(x), self.find_id(y)
+                if len(a) > 0:
+                    for item2 in a:
+                        out.append(replace(item, TreeNode("x"), item2))
+                if len(b) > 0:
+                    for item2 in b:
+                        out.append(replace(item, TreeNode("y"), item2))
+            return out
         log = []
         if rule == []:
-            return 0
+            return [0]
+        if isinstance(rule, tuple) and rule[0] == "ANSWER":
+            log +=  helper2([rule[1]],x,y)
+        if isinstance(rule, tuple) and rule[0] == "ASK":
+            if rule[1].name == "who":
+                for item in rule[2]:
+                    log += self.process_rule(item, x, y)
         if isinstance(rule, list):
             for item in rule:
                 if isinstance(item, Condition):
-                    log.append(self.process_rule(item, x, y))
+                    log += self.process_rule(item, x, y)
                 elif isinstance(item, tuple):
+                    if item[0] == "ANSWER":
+                        log += helper2([item[1]],x,y)
                     if item[0] == "THROW":
-                        return None
+                        return [None]
                     if item[0] == "ASSERT":
                         if item[1].name in ["girl", "boy"]:
                             self.table_entry_list[helper([item[1].children[0]],x,y)[0]].attr[item[1].name] = "true"
@@ -225,27 +271,27 @@ IF x is y's father
             if rule.expr.name == "equal":
                 out = helper(rule.expr.children, x, y)
                 if None in out:
-                    log.append(self.process_rule(rule.unknown, x, y))
+                    log += self.process_rule(rule.unknown, x, y)
                 elif out[0] == out[1]:
-                    log.append(self.process_rule(rule.true, x, y))
+                    log += self.process_rule(rule.true, x, y)
                 else:
-                    log.append(self.process_rule(rule.false, x, y))
+                    log += self.process_rule(rule.false, x, y)
             if rule.expr.name in ["girl", "boy"]:
                 out = helper([rule.expr.children[0]],x,y)[0]
                 if out is not None:
                     out2 = 0
                     if rule.expr.name in self.table_entry_list[out].attr.keys():
                         if rule.expr.name not in self.table_entry_list[out].attr.keys():
-                            log.append(self.process_rule(rule.unknown, x, y))
+                            log += self.process_rule(rule.unknown, x, y)
                         else:
                             out2 = self.table_entry_list[out].attr[rule.expr.name]
                             if out2 == "true":
-                                log.append(self.process_rule(rule.true, x, y))
+                                log += self.process_rule(rule.true, x, y)
                             elif out2 == "false":
-                                log.append(self.process_rule(rule.false, x, y))
+                                log += self.process_rule(rule.false, x, y)
         if None in log:
             return None
-        return 0
+        return log
     def create_node(self, node):
         if node.name.startswith("d_"):
             return int(node.name[2:])
@@ -283,6 +329,7 @@ IF x is y's father
         orig = str(self)
         done = True
         out = None
+        tmp = []
         if len(self.table_entry_list.keys()) == 1:
             out = self.create()
         while done:
@@ -290,16 +337,18 @@ IF x is y's father
             id_lst = list(self.table_entry_list.keys())
             for item in self.rule:
                 if len(id_lst) == 1:
-                    if self.process_rule(item, id_lst[0], out) is None:
+                    tmp += self.process_rule(item, id_lst[0], out)
+                    if None in tmp:
                         return None
                 else:
                     for item2 in itertools.permutations(id_lst, 2):
-                        if self.process_rule(item, *item2) is None:
+                        tmp += self.process_rule(item, *item2)
+                        if None in tmp:
                             return None
             if orig != str(self):
                 done = True
                 orig = str(self)
-        return 0
+        return list(set(tmp)-set([0]))
     def equate_bool_eq(self, eq):
         if len(eq.children) != 1 or not valid_actor_eq(eq.children[0]):
             return None
@@ -312,29 +361,6 @@ IF x is y's father
         if self.process_all_rule() is None:
             return None
         return out
-    def lambda_compute(self, eq):
-        if eq.name == "lambda":
-            output = []
-            for key, item in self.table_entry_list.items():
-                c = replace(eq.children[1], eq.children[0], TreeNode(str(key)).fx("id"))
-                s = replace(eq.children[2], eq.children[0], TreeNode(str(key)).fx("id"))
-                u = replace(eq.children[3], eq.children[0], TreeNode(str(key)).fx("id"))
-                out = self.bool_eq(c)
-                if out is True:
-                    output.append(s)
-                elif out is False:
-                    output.append(u)                    
-            for i in range(len(output)-1,-1,-1):
-                if output[i] == TreeNode("DELETE") or contain2(output[i], TreeNode("DELETE")):
-                    output.pop(i)
-            output2 = []
-            for item in output:
-                output2 += self.rm_eq_id(item)
-            output = list(set(output2))
-            if len(output) == 1:
-                return output[0]
-            return output
-        return []
     def bool_eq(self, eq):
         number_lst = []
         number = None
@@ -413,7 +439,7 @@ IF x is y's father
     def copy_table(a, b):
         a.table_entry_list = copy.deepcopy(b.table_entry_list)
         a.id_system = copy.deepcopy(b.id_system)
-    def equate(self, eq):
+    def context(self, eq):
         orig = copy.deepcopy(self)
         a = self.equate_bool_eq(eq)
         b = None
@@ -439,89 +465,6 @@ IF x is y's father
             return a
         self.copy_table(orig)
         return None
-    def alias_gen(self):
-        for key, item in self.table_entry_list.items():
-            item.alias = list(item.entry)
-
-        relations = [
-            "mother",
-            "father",
-            "son",
-            "daughter",
-            "sister",
-            "brother"
-        ]
-        for _ in range(2):
-            snapshot = {
-                k: list(v.alias)
-                for k, v in self.table_entry_list.items()
-            }
-            for key, aliases in snapshot.items():
-                if not aliases:
-                    continue
-                # shortest alias
-                base = min(
-                    aliases,
-                    key=lambda x: len(str_form(x))
-                )
-                # FIX:
-                # avoid TreeNode(TreeNode(...))
-                base_node = (
-                    base
-                    if isinstance(base, TreeNode)
-                    else TreeNode(base)
-                )
-                for relation in relations:
-                    targets = self.find_human(
-                        key,
-                        [relation],
-                        False
-                    )
-                    if len(targets) != 1:
-                        continue
-                    # normalize single value -> list
-                    if not isinstance(targets, list):
-                        targets = [targets]
-                    new_alias = base_node.fx(relation)
-                    for target in targets:
-                        if target not in self.table_entry_list:
-                            continue
-                        if (
-                            new_alias
-                            not in self.table_entry_list[target].alias
-                        ):
-                            self.table_entry_list[target].alias.append(
-                                new_alias
-                            )
-    def find_from_id(self, number):
-        out = [item if isinstance(item, TreeNode) else TreeNode(item) for item in self.table_entry_list[number].alias]
-        return list(set(out))
-    def rm_eq_id(self, eq):
-        self.alias_gen()
-        id_nodes = collect_id_nodes(eq)
-        if not id_nodes:
-            return [eq]
-        replacement_choices = []
-        for node in id_nodes:
-            number = int(node.children[0].name)
-            aliases = self.find_from_id(number)
-            if aliases == []:
-                aliases = [node]
-            replacement_choices.append(aliases)
-        outputs = []
-        for combo in itertools.product(*replacement_choices):
-            new_eq = eq
-            for old_node, new_node in zip(
-                id_nodes,
-                combo
-            ):
-                new_eq = replace(
-                    new_eq,
-                    old_node,
-                    new_node
-                )
-            outputs.append(new_eq)
-        return outputs
     def __repr__(self):
         s = None
         if self.id_system == []:

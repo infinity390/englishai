@@ -5,7 +5,7 @@ README = Path(__file__).parent / "README.md"
 
 setup(
     name="englishai",
-    version="0.3.9",
+    version="0.4.0",
 
     description="Rule-based symbolic English parsing and reasoning engine",
     long_description=README.read_text(encoding="utf-8"),

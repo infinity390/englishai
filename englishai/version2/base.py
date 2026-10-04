@@ -83,3 +83,7 @@ def dowhile(eq, fx):
         eq = copy.deepcopy(eq2)
         if eq == orig:
             return orig
+def var_in_eq(eq):
+    if eq.name in ["x", "y"]:
+        return False
+    return all(var_in_eq(child) for child in eq.children)

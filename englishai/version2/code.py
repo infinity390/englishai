@@ -755,7 +755,7 @@ def infer_equation2(split, funcs):
         return TreeNode("lambda", [TreeNode("A"), TreeNode(v, [a]), TreeNode("yes"), TreeNode("no")])
     if funcs == ["who", "aux", "actor"]:
         a = actor(split[2])["tree"]
-        return TreeNode("lambda", [TreeNode("A"), TreeNode("equal", [TreeNode("A"), a]), TreeNode("A"), TreeNode("DELETE")])
+        return a.fx("who")
     if funcs == ["who", "verb", "actor"]:
         v = parse_verb(split[1])["root"]
         a = actor(split[2])["tree"]
@@ -815,4 +815,4 @@ def code(sentence):
             out3 = infer_equation(*out2)
             if out3 is not None:
                 return out3
-    return None
+    return actor(sentence.split(" "))["tree"]
