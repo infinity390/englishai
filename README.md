@@ -87,15 +87,28 @@ ANSWER: yes
 ## Demonstration of Version 2 which is in Development
 
 ```py
-from englishai.version2 import *
-table = Table()
-table.context(code("john is mary's father"))
-table.context(code("i am john"))
-print(table.ask(code("who is john")))
+from englishai.version2 import Table, code
+t = Table()
+t.context(code("john is your father"))
+t.context(code("mary is your mother"))
+t.context(code("you are a girl"))
+print("Who are you?", t.ask(code("who are you")))
+print("Who is John?", t.ask(code("who is john")))
+print("Who is Mary?", t.ask(code("who is mary")))
+print("Is John a boy?", t.question(code("is john a boy")))
+print("Is Mary a girl?", t.question(code("is mary a girl")))
+print("Are you John's son?", t.question(code("are you john's son")))
+print("Is Mary your mother?", t.question(code("is mary your mother")))
 ```
 
 ## Output of the code
 
 ```
-['i', 'john', "mary's father"]
+Who are you? ['i', "john's daughter", "mary's daughter"]
+Who is John? ['john', 'my father']
+Who is Mary? ['mary', 'my mother']
+Is John a boy? True
+Is Mary a girl? True
+Are you John's son? False
+Is Mary your mother? True
 ```

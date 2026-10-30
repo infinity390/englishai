@@ -38,7 +38,7 @@ def parse_noun_phrase(words):
         "him",
         "them",
         "us",
-        "myself",
+        "not",
         "men",
         "women",
         "children",
@@ -450,7 +450,7 @@ def parse_verb(words):
         "continuous": False
     }
 VALID_NOUNS = {
-    "boy", "girl"
+    "boy", "girl", "father", "mother", "friend"
 }
 def validate_noun(word):
     w = word.lower()
@@ -510,7 +510,7 @@ def parse_category(words):
             "root": word[:-1],
             "number": "plural"
         }
-    return None
+    return {"root": word, "number": "singular"}
 SYNONYMS = {
     "boy": "boy",
     "man": "boy",
@@ -585,7 +585,6 @@ def split_sentence(words):
         except:
             return False
 
-    # Specific grammar rules (excluding fallback)
     parsers = [
         ("actor", valid_actor),
         ("aux", valid_aux),
@@ -602,7 +601,8 @@ def split_sentence(words):
         if index >= n:
             for i in range(len(funcs) - 1):
                 if funcs[i] == "actor" and funcs[i + 1] == "actor":
-                    return
+                    if i == 0 or funcs[i - 1] != "aux":
+                        return
             results.append((splits[:], funcs[:]))
             return
 
@@ -610,17 +610,18 @@ def split_sentence(words):
             chunk = words[index:end]
             matched_any = False
 
-            # Try all standard grammar parsers
             for name, parser in parsers:
-                if parser(chunk):
-                    matched_any = True
-                    splits.append(chunk)
-                    funcs.append(name)
-                    recurse(end, splits, funcs)
-                    splits.pop()
-                    funcs.pop()
+                try:
+                    if parser(chunk):
+                        matched_any = True
+                        splits.append(chunk)
+                        funcs.append(name)
+                        recurse(end, splits, funcs)
+                        splits.pop()
+                        funcs.pop()
+                except:
+                    pass
 
-            # Fallback: Tag as "sentence" ONLY if no other parser matched this chunk
             if not matched_any:
                 splits.append(chunk)
                 funcs.append("sentence")
@@ -712,7 +713,6 @@ def combine_features(split, funcs):
     )
     return result
 def infer_equation2(split, funcs):
-    
     if funcs == ["actor", "verb", "actor", "that", "sentence"]:
         a = actor(split[0])["tree"]
         a2 = actor(split[2])["tree"]
@@ -722,7 +722,10 @@ def infer_equation2(split, funcs):
     if split[0] != ["who"] and combine_features(split[:2], funcs[:2])["valid"] is False:
         return None
     last_actor = None
-    
+    if funcs == ["aux", "actor", "actor"]:
+        a1 = actor(split[1])["tree"]
+        a2 = actor(split[2])["tree"]
+        return TreeNode("equal", [a1, a2]).fx("question")
     if funcs.count("actor") == 2:
         if len(split)>=3 and funcs[-1] == "actor" and actor(split[-1])["form"] == "subject":
             return None
@@ -739,27 +742,9 @@ def infer_equation2(split, funcs):
         if actor(split[lst[0]])["tree"] == actor(split[lst[1]])["tree"] and last_actor["tree"].name in ["she", "he", "i", "we", "they", "you"]:
             if len(split[lst[1]][0]) <= 4 or split[lst[1]][0][-4:] != "self":
                 return None
-    if funcs == ["actor", "verb", "noun"]:
-        v = parse_verb(split[1])["root"]
-        a = actor(split[0])["tree"]
-        if parse_category(split[2])["root"] in ["friend"]:
-            return TreeNode(v, [a,TreeNode("lambda", [TreeNode("A"),\
-                                                      TreeNode("TRUE"),\
-                                                      TreeNode("equal", [actor(split[0])["tree"], TreeNode("A").fx(parse_category(split[2])["root"])]),\
-                                                      TreeNode("DELETE")])])
-        else:
-            return TreeNode(v, [a,TreeNode("lambda", [TreeNode("A"), TreeNode("A").fx(parse_category(split[2])["root"]), TreeNode("A"), TreeNode("DELETE")])])
-    if funcs == ["aux", "actor", "adjective"]:
-        a = actor(split[1])["tree"]
-        v = parse_adjective(split[2])
-        return TreeNode("lambda", [TreeNode("A"), TreeNode(v, [a]), TreeNode("yes"), TreeNode("no")])
     if funcs == ["who", "aux", "actor"]:
         a = actor(split[2])["tree"]
         return a.fx("who")
-    if funcs == ["who", "verb", "actor"]:
-        v = parse_verb(split[1])["root"]
-        a = actor(split[2])["tree"]
-        return TreeNode("lambda", [TreeNode("A"), TreeNode(v, [TreeNode("A"), a]), TreeNode("A"), TreeNode("DELETE")])
     if funcs == ["actor", "aux", "adjective"]:
         return actor(split[0])["tree"].fx(parse_adjective(split[2]))
     if funcs == ["actor", "aux", "not", "adjective"]:
@@ -769,7 +754,7 @@ def infer_equation2(split, funcs):
     if funcs == ["aux", "actor", "noun"]:
         a = actor(split[1])["tree"]
         v = parse_category(split[2])["root"]
-        return TreeNode("lambda", [TreeNode("A"), TreeNode(v, [a]), TreeNode("yes"), TreeNode("no")])
+        return TreeNode(v, [a]).fx("question")
     if funcs == ["actor", "aux", "not", "noun"]:
         lst = " ".join(split[0]+split[1]+split[3])
         return code(lst).fx("not")
@@ -796,7 +781,6 @@ def infer_equation2(split, funcs):
     if funcs == ["actor", "verb"]:
         return actor(split[0])["tree"].fx(parse_verb(split[1])["root"])
     if funcs == ["actor", "verb", "actor"]:
-        
         return TreeNode(parse_verb(split[1])["root"], [actor(split[0])["tree"], last_actor["tree"]])
     if funcs == ["actor", "aux", "actor"]:
         return TreeNode("equal",[actor(split[0])["tree"], last_actor["tree"]])
@@ -805,9 +789,15 @@ def infer_equation(split, funcs):
     out = infer_equation2(split, funcs)
     return normalize_synonyms(out)
 def code(sentence):
-    out = split_sentence(
-        sentence.split()
-    )
+    words = sentence.split()
+    if "not" in [w.lower() for w in words]:
+        neg_index = [i for i, w in enumerate(words) if w.lower() == "not"][0]
+        sub_words = words[:neg_index] + words[neg_index + 1:]
+        sub_code = code(" ".join(sub_words))
+        if sub_code is not None:
+            return TreeNode("not", [sub_code])
+
+    out = split_sentence(words)
     if len(out) == 0:        
         return None
     else:
@@ -815,4 +805,4 @@ def code(sentence):
             out3 = infer_equation(*out2)
             if out3 is not None:
                 return out3
-    return actor(sentence.split(" "))["tree"]
+    return actor(words)["tree"]
