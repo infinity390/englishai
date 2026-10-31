@@ -36,7 +36,8 @@ class Condition:
 # ---------------------------------------------------------------------------
 # Rule language
 #
-#   FUNCTION name      declares a unary function (x's name is another entity)
+#   FUNCTION name      one-valued link: every x has at most one (mother, father)
+#   RELATION name      many-valued link: x may have several (sister, son, ...)
 #   IF expr            branches TRUE / FALSE / UNKNOWN
 #   ASSERT expr        add a fact           (expr may be "not ...")
 #   THROW              contradiction
@@ -48,7 +49,6 @@ class Condition:
 from pathlib import Path
 RULES_FILE = Path(__file__).parent / "rules.txt"
 RULES = RULES_FILE.read_text(encoding="utf-8")
-
 
 def parse(s):
     lines = [
@@ -93,7 +93,7 @@ def parse(s):
                 result.append(("ASK", code(expr), children))
             else:
                 head, *sentence = text.split(maxsplit=1)
-                if head == "FUNCTION":
+                if head in ("FUNCTION", "RELATION"):
                     # raw name, not an expression
                     result.append((head, sentence[0] if sentence else None))
                 elif sentence:
@@ -201,16 +201,42 @@ class Table:
         self.alias = {}        # merged-away id -> surviving id
         self.curr = 0
         self.rule = parse(rules)
-        self.functions = {
-            r[1].strip()
-            for r in self.rule
-            if isinstance(r, tuple) and r[0] == "FUNCTION" and r[1]
-        }
+        self.functions = self._declared("FUNCTION")
+        self.relations = self._declared("RELATION")
         # rules that are run to a fixed point (everything except templates)
         self.inference_rules = [
             r for r in self.rule
-            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION"))
+            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION"))
         ]
+
+    def _declared(self, head):
+        return {
+            r[1].strip()
+            for r in self.rule
+            if isinstance(r, tuple) and r[0] == head and r[1]
+        }
+
+    def _has_free_var(self, node):
+        """True if the template variables x / y are still present in node."""
+        if not node.children and node.name in ("x", "y"):
+            return True
+        return any(self._has_free_var(c) for c in node.children)
+
+    def _is_rel(self, node):
+        """r(z) where r is a RELATION: a set of entities, not one entity."""
+        return node.name in self.relations and len(node.children) == 1
+
+    def _split_rel(self, eq):
+        """
+        For equal(a, b) where exactly one side is a relation term r(z),
+        return (entity_expr, r(z)); otherwise None.
+        """
+        l, r = eq.children
+        if self._is_rel(l) and not self._is_rel(r):
+            return r, l
+        if self._is_rel(r) and not self._is_rel(l):
+            return l, r
+        return None
 
     # ------------------------------------------------------------------
     # state
@@ -348,6 +374,19 @@ class Table:
             return self._assert_expr(eq.children[0], not positive, create)
 
         if eq.name == "equal" and len(eq.children) == 2:
+            if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
+                sp = self._split_rel(eq)
+                if sp is None or not positive:
+                    return False                 # not stored
+                ent, term = sp
+                x = self.create_node(ent, create)
+                owner = self.create_node(term.children[0], create)
+                if x is None or owner is None:
+                    return False
+                self.table_entry_list[self._find(owner)].rel.setdefault(
+                    term.name, set()
+                ).add(self._find(x))
+                return True
             p = self.create_node(eq.children[0], create)
             q = self.create_node(eq.children[1], create)
             if p is None or q is None:
@@ -390,6 +429,19 @@ class Table:
             return None if v is None else (not v)
 
         if eq.name == "equal" and len(eq.children) == 2:
+            if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
+                sp = self._split_rel(eq)
+                if sp is None:
+                    return None
+                ent, term = sp
+                x = self.create_node(ent, create)
+                owner = self.create_node(term.children[0], create)
+                if x is None or owner is None:
+                    return None
+                # membership is only ever proven, never disproven (open world)
+                if self._find(x) in self._targets(owner, term.name):
+                    return True
+                return None
             p = self.create_node(eq.children[0], create)
             q = self.create_node(eq.children[1], create)
             if p is None or q is None:
@@ -584,24 +636,35 @@ class Table:
         snap = self._snapshot()
         try:
             self._propagate()
-            out = self.create_node(eq.children[0], CREATE_ALL)
-            if out is None:
-                return None
-            self._propagate()
+            target = eq.children[0]
+            if self._is_rel(target):
+                # "who is my sister": every member of the relation
+                base = self.create_node(target.children[0], CREATE_ALL)
+                if base is None:
+                    return None
+                self._propagate()
+                outs = sorted(self._targets(base, target.name))
+            else:
+                out = self.create_node(target, CREATE_ALL)
+                if out is None:
+                    return None
+                self._propagate()
+                outs = [self._find(out)]
             answers = []
             ids = list(self.table_entry_list.keys())
-            for rule in self.rule:
-                if (
-                    isinstance(rule, tuple)
-                    and rule[0] == "ASK"
-                    and rule[1].name == "who"
-                ):
-                    for other in ids:
-                        self.process_rule(rule, out, other, answers)
+            for out in outs:
+                for rule in self.rule:
+                    if (
+                        isinstance(rule, tuple)
+                        and rule[0] == "ASK"
+                        and rule[1].name == "who"
+                    ):
+                        for other in ids:
+                            self.process_rule(rule, out, other, answers)
             phrases = []
             for item in answers:
-                if not var_in_eq(item):
-                    continue
+                if self._has_free_var(item) or not var_in_eq(item):
+                    continue          # template variable x / y never got a name
                 item = swap_pronouns(item)
                 try:
                     p = actor_to_phrase(item)
