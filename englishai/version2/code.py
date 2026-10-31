@@ -1,6 +1,8 @@
 from .base import *
 import itertools
 import copy
+
+
 def combine_relation(node):
     node.children = [
         combine_relation(c)
@@ -19,6 +21,8 @@ def combine_relation(node):
         child.name + "-friend",
         child.children
     )
+
+
 def parse_noun_phrase(words):
     if not words:
         return None, None
@@ -28,7 +32,7 @@ def parse_noun_phrase(words):
         "my", "your", "his",
         "her", "our", "their",
         "myself", "yourself", "herself", "himself", "themselves", "ourselves",
-        "father", "mother", "mom",
+        "father", "mother", "mom", "dad", "papa", "mama",
         "brother", "sister",
         "son", "daughter",
         "friend",
@@ -38,7 +42,6 @@ def parse_noun_phrase(words):
         "him",
         "them",
         "us",
-        "not",
         "men",
         "women",
         "children",
@@ -73,9 +76,8 @@ def parse_noun_phrase(words):
         "him": "he",
         "them": "they",
         "us": "we",
-        "herself":"she",
-        "himself":"he",
-        "myself":"i"
+        "herself": "she",
+        "himself": "he",
     }
     pronoun_number = {
         "i": "singular",
@@ -96,6 +98,7 @@ def parse_noun_phrase(words):
         "teeth": "tooth",
         "feet": "foot"
     }
+
     def singularize(w):
         if w in irregular_plural:
             return irregular_plural[w], True
@@ -106,6 +109,7 @@ def parse_noun_phrase(words):
         if w.endswith("s") and not w.endswith("ss") and len(w) > 1:
             return w[:-1], True
         return w, False
+
     def atom(w):
         if w == "'s":
             return None, None
@@ -134,6 +138,7 @@ def parse_noun_phrase(words):
             singular,
             "plural" if is_plural else "singular"
         )
+
     clean = []
     numbers = []
     for w in words:
@@ -148,6 +153,8 @@ def parse_noun_phrase(words):
         node = node.fx(w)
     head_number = numbers[-1]
     return node, head_number
+
+
 def has_branch(node, name):
     if node is None:
         return False
@@ -157,20 +164,26 @@ def has_branch(node, name):
         if has_branch(child, name):
             return True
     return False
+
+
 def parse_adjective(words):
+    if not words:
+        raise ValueError("Invalid adjective: <empty>")
     word = words[0]
     vocabulary = {
-        "happy":"happy",
-        "sad":"sad",
-        "alive":"live",
-        "dead":"die"
+        "happy": "happy",
+        "sad": "sad",
+        "alive": "live",
+        "dead": "die"
     }
     w = word.lower()
-    if w not in vocabulary.keys() or len(words)!=1:
+    if w not in vocabulary.keys() or len(words) != 1:
         raise ValueError(
             f"Invalid adjective: {word}"
         )
     return vocabulary[w]
+
+
 def actor(words):
     node, number = parse_noun_phrase(words)
     node = combine_relation(node)
@@ -227,6 +240,8 @@ def actor(words):
         "person": person,
         "form": form
     }
+
+
 def aux_verb(word_list):
     if not word_list:
         return None
@@ -267,14 +282,106 @@ def aux_verb(word_list):
             "person": ["1st", "2nd", "3rd"]
         }
     raise ValueError(
-            f"Invalid verb vocabulary: {w}"
-        )
+        f"Invalid verb vocabulary: {w}"
+    )
+
+
 class Speech:
     def __init__(self):
         self.pronoun_map = {}
         self.sentence = []
-    def listen_word(word):
+
+    def listen_word(self, word):
         pass
+
+
+# ---------------------------------------------------------------------------
+# verbs
+# ---------------------------------------------------------------------------
+VERB_VOCAB = {
+    "eat", "go", "see", "give",
+    "take", "run", "die",
+    "come", "do", "have",
+    "walk", "study", "kill", "want",
+    "love", "hate", "help",
+    "tell", "say",
+    "ate", "went", "gone", "told", "tells",
+    "saw", "seen",
+    "gave", "given",
+    "took", "taken",
+    "ran", "died",
+    "came",
+    "did", "done",
+    "had",
+    "has",
+    "does"
+}
+
+# form -> (root, tense) or (root, tense, person, number)
+VERB_IRREGULAR = {
+    "ate": ("eat", "past"),
+    "went": ("go", "past"),
+    "gone": ("go", "past"),
+    "saw": ("see", "past"),
+    "seen": ("see", "past"),
+    "gave": ("give", "past"),
+    "given": ("give", "past"),
+    "took": ("take", "past"),
+    "taken": ("take", "past"),
+    "ran": ("run", "past"),
+    "told": ("tell", "past"),
+    "said": ("say", "past"),
+    "tells": ("tell", "present", ["3rd"], "singular"),
+    "says": ("say", "present", ["3rd"], "singular"),
+    "died": ("die", "past"),
+    "dies": ("die", "present", ["3rd"], "singular"),
+    "came": ("come", "past"),
+    "did": ("do", "past"),
+    "done": ("do", "past"),
+    "had": ("have", "past"),
+    "has": ("have", "present", ["3rd"], "singular"),
+    "does": ("do", "present", ["3rd"], "singular"),
+}
+
+
+def _first_known(candidates):
+    """First candidate that is a known verb (None if there is none)."""
+    for c in candidates:
+        if c and c in VERB_VOCAB:
+            return c
+    return None
+
+
+def _doubled(stem):
+    """running -> runn -> run"""
+    if len(stem) >= 2 and stem[-1] == stem[-2]:
+        return stem[:-1]
+    return None
+
+
+def _root_ing(stem):
+    if stem in ("dy", "ly"):                    # dying -> die
+        return _first_known([stem[:-1] + "ie"])
+    return _first_known([stem, stem + "e", _doubled(stem)])   # loving -> love
+
+
+def _root_ed(stem):
+    return _first_known([
+        stem,                                    # walked -> walk
+        stem + "e",                              # loved  -> love
+        _doubled(stem),                          # stopped -> stop
+        stem[:-1] + "y" if stem.endswith("i") else None,   # studied -> study
+    ])
+
+
+def _root_s(verb):
+    return _first_known([
+        verb[:-3] + "y" if verb.endswith("ies") else None,  # studies -> study
+        verb[:-2],                               # goes -> go
+        verb[:-1],                               # takes -> take, kills -> kill
+    ])
+
+
 def parse_verb(words):
     if not words:
         return None
@@ -283,175 +390,51 @@ def parse_verb(words):
             f"Verb parser accepts exactly one word: {words}"
         )
     verb = words[0].lower()
-    vocabulary = {
-        "eat", "go", "see", "give",
-        "take", "run", "die",
-        "come", "do", "have",
-        "walk", "study", "kill", "want",
-        "love", "hate", "help",
-        "ate", "went", "gone", "told", "tells", "tell",
-        "saw", "seen",
-        "gave", "given",
-        "took", "taken",
-        "ran", "died",
-        "came",
-        "did", "done",
-        "had",
-        "has",
-        "does"
-    }
-    irregular = {
-        "ate": ("eat", "past"),
-        "went": ("go", "past"),
-        "gone": ("go", "past"),
-        "saw": ("see", "past"),
-        "seen": ("see", "past"),
-        "gave": ("give", "past"),
-        "given": ("give", "past"),
-        "took": ("take", "past"),
-        "taken": ("take", "past"),
-        "ran": ("run", "past"),
-        "told": ("tell", "past"),
-        "tells": ("tell", "present"),
-        "died": ("die", "past"),
-        "dies": ("die", "present"),
-        "came": ("come", "past"),
-        "did": ("do", "past"),
-        "done": ("do", "past"),
-        "had": ("have", "past"),
-        "has": (
-            "have",
-            "present",
-            ["3rd"],
-            "singular"
-        ),
-        "does": (
-            "do",
-            "present",
-            ["3rd"],
-            "singular"
-        )
-    }
-    def estimate_root(v):
-        if v in irregular:
-            return irregular[v][0]
-        if v.endswith("ing"):
-            stem = v[:-3]
-            if stem in ["dy", "ly"]:
-                return stem[:-1] + "ie"
-            if len(stem) >= 2 and stem[-1] == stem[-2] and stem not in ["kill"]:
-                stem = stem[:-1]
-            return stem
-        if v.endswith("ed"):
-            return v[:-2]
-        if v.endswith("ied"):
-            return v[:-3] + "y"
-        if v.endswith("ies"):
-            return v[:-3] + "y"
-        if v.endswith("es"):
-            if len(v) > 3 and v[-3] not in "aeiou":
-                return v[:-2]
-            return v[:-1]
-        if v.endswith("s") and not v.endswith("ss"):
-            return v[:-1]
-        return v
-    estimated = estimate_root(verb)
-    if (
-        verb not in vocabulary
-        and estimated not in vocabulary
-    ):
-        raise ValueError(
-            f"Invalid verb vocabulary: {verb}"
-        )
-    if verb in irregular:
-        data = irregular[verb]
-        if len(data) == 2:
-            root, tense = data
-            return {
-                "root": root,
-                "tense": tense,
-                "person": ["1st", "2nd", "3rd"],
-                "number": ['plural', 'singular'],
-                "continuous": False
-            }
-        root, tense, person, number = data
+
+    def result(root, tense, person=None, number=None, continuous=False):
         return {
             "root": root,
             "tense": tense,
-            "person": person,
-            "number": [number],
-            "continuous": False
+            "person": person or ["1st", "2nd", "3rd"],
+            "number": number or ["plural", "singular"],
+            "continuous": continuous
         }
-    if verb.endswith("ing"):
-        stem = verb[:-3]
-        if (
-            len(stem) >= 2
-            and stem[-1] == stem[-2]
-            and stem not in ["kill"]
-        ):
-            stem = stem[:-1]
-        root = None
-        if stem in ["dy", "ly"]:
-            root = stem[:-1]+"ie"
-        else:
-            root = stem
-        return {
-            "root": root,
-            "tense": "present",
-            "person": ["1st", "2nd", "3rd"],
-            "number": ['plural', 'singular'],
-            "continuous": True
-        }
-    if verb.endswith("ied"):
-        return {
-            "root": verb[:-3] + "y",
-            "tense": "past",
-            "person": ["1st", "2nd", "3rd"],
-            "number": ['plural', 'singular'],
-            "continuous": False
-        }
-    if verb.endswith("ed"):
-        return {
-            "root": verb[:-2],
-            "tense": "past",
-            "person": ["1st", "2nd", "3rd"],
-            "number": ['plural', 'singular'],
-            "continuous": False
-        }
-    if verb.endswith("ies"):
-        return {
-            "root": verb[:-3] + "y",
-            "tense": "present",
-            "person": ["3rd"],
-            "number": ["singular"],
-            "continuous": False
-        }
-    if verb.endswith("es"):
-        return {
-            "root": verb[:-2],
-            "tense": "present",
-            "person": ["3rd"],
-            "number": ["singular"],
-            "continuous": False
-        }
+
+    if verb in VERB_IRREGULAR:
+        data = VERB_IRREGULAR[verb]
+        if len(data) == 2:
+            return result(*data)
+        root, tense, person, number = data
+        return result(root, tense, person, [number])
+
+    if verb in VERB_VOCAB:
+        return result(verb, "present")
+
+    if verb.endswith("ing") and len(verb) > 4:
+        root = _root_ing(verb[:-3])
+        if root:
+            return result(root, "present", continuous=True)
+
+    if verb.endswith("ed") and len(verb) > 3:
+        root = _root_ed(verb[:-2])
+        if root:
+            return result(root, "past")
+
     if verb.endswith("s") and not verb.endswith("ss"):
-        return {
-            "root": verb[:-1],
-            "tense": "present",
-            "person": ["3rd"],
-            "number": ["singular"],
-            "continuous": False
-        }
-    return {
-        "root": verb,
-        "tense": "present",
-        "person": ["1st", "2nd", "3rd"],
-        "number": ["singular", "plural"],
-        "continuous": False
-    }
+        root = _root_s(verb)
+        if root:
+            return result(root, "present", ["3rd"], ["singular"])
+
+    raise ValueError(
+        f"Invalid verb vocabulary: {verb}"
+    )
+
+
 VALID_NOUNS = {
     "boy", "girl", "father", "mother", "friend"
 }
+
+
 def validate_noun(word):
     w = word.lower()
     if w in VALID_NOUNS:
@@ -466,6 +449,8 @@ def validate_noun(word):
     if w in irregular_plural:
         return True
     return False
+
+
 NON_NOUN_BLOCKLIST = {
     "is", "are", "am", "was", "were", "be", "been", "being",
     "do", "does", "did",
@@ -477,6 +462,8 @@ NON_NOUN_BLOCKLIST = {
     "see", "saw", "seen",
     "kill", "killed", "killing"
 }
+
+
 def parse_category(words):
     if not words:
         return None
@@ -511,6 +498,8 @@ def parse_category(words):
             "number": "plural"
         }
     return {"root": word, "number": "singular"}
+
+
 SYNONYMS = {
     "boy": "boy",
     "man": "boy",
@@ -539,6 +528,8 @@ SYNONYMS = {
     "they": "they",
     "them": "they"
 }
+
+
 def normalize_synonyms(node):
     if node is None:
         return None
@@ -548,6 +539,8 @@ def normalize_synonyms(node):
         for child in node.children
     ]
     return node
+
+
 def split_sentence(words):
     results = []
     n = len(words)
@@ -558,31 +551,31 @@ def split_sentence(words):
     def valid_actor(chunk):
         try:
             return actor(chunk) is not None
-        except:
+        except Exception:
             return False
 
     def valid_adjective(chunk):
         try:
             return parse_adjective(chunk) is not None
-        except:
+        except Exception:
             return False
 
     def valid_aux(chunk):
         try:
             return aux_verb(chunk) is not None
-        except:
+        except Exception:
             return False
 
     def valid_noun(chunk):
         try:
             return parse_category(chunk) is not None
-        except:
+        except Exception:
             return False
 
     def valid_verb(chunk):
         try:
             return parse_verb(chunk) is not None
-        except:
+        except Exception:
             return False
 
     parsers = [
@@ -619,7 +612,7 @@ def split_sentence(words):
                         recurse(end, splits, funcs)
                         splits.pop()
                         funcs.pop()
-                except:
+                except Exception:
                     pass
 
             if not matched_any:
@@ -631,6 +624,8 @@ def split_sentence(words):
 
     recurse(0, [], [])
     return results
+
+
 def combine_features(split, funcs):
     result = {
         "tense": None,
@@ -712,6 +707,8 @@ def combine_features(split, funcs):
         else []
     )
     return result
+
+
 def infer_equation2(split, funcs):
     if funcs == ["actor", "verb", "actor", "that", "sentence"]:
         a = actor(split[0])["tree"]
@@ -727,7 +724,7 @@ def infer_equation2(split, funcs):
         a2 = actor(split[2])["tree"]
         return TreeNode("equal", [a1, a2]).fx("question")
     if funcs.count("actor") == 2:
-        if len(split)>=3 and funcs[-1] == "actor" and actor(split[-1])["form"] == "subject":
+        if len(split) >= 3 and funcs[-1] == "actor" and actor(split[-1])["form"] == "subject":
             return None
         lst = []
         for i in range(len(funcs)):
@@ -756,7 +753,7 @@ def infer_equation2(split, funcs):
         v = parse_category(split[2])["root"]
         return TreeNode(v, [a]).fx("question")
     if funcs == ["actor", "aux", "not", "noun"]:
-        lst = " ".join(split[0]+split[1]+split[3])
+        lst = " ".join(split[0] + split[1] + split[3])
         return code(lst).fx("not")
     if funcs == ["actor", "verb", "to", "verb"]:
         v1 = parse_verb(split[1])["root"]
@@ -783,11 +780,15 @@ def infer_equation2(split, funcs):
     if funcs == ["actor", "verb", "actor"]:
         return TreeNode(parse_verb(split[1])["root"], [actor(split[0])["tree"], last_actor["tree"]])
     if funcs == ["actor", "aux", "actor"]:
-        return TreeNode("equal",[actor(split[0])["tree"], last_actor["tree"]])
+        return TreeNode("equal", [actor(split[0])["tree"], last_actor["tree"]])
     return None
+
+
 def infer_equation(split, funcs):
     out = infer_equation2(split, funcs)
     return normalize_synonyms(out)
+
+
 def code(sentence):
     words = sentence.split()
     if "not" in [w.lower() for w in words]:
@@ -798,7 +799,7 @@ def code(sentence):
             return TreeNode("not", [sub_code])
 
     out = split_sentence(words)
-    if len(out) == 0:        
+    if len(out) == 0:
         return None
     else:
         for out2 in out:

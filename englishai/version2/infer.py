@@ -4,6 +4,14 @@ import copy
 from .decode import *
 from .code import *
 
+# how much create_node may create
+CREATE_NONE = 0   # lookup only (rule conditions)
+CREATE_LINK = 1   # may create function values, e.g. i's sister (rule ASSERTs)
+CREATE_ALL = 2    # may also create new named entities (statements, questions)
+
+NE = "!="         # rel key holding the ids an entity is known to differ from
+
+
 class Contradiction(Exception):
     """Raised internally when a rule THROWs or a fact conflicts with another."""
 
@@ -38,6 +46,13 @@ class Condition:
 # Nothing about girls, boys, mothers, ... is known to the Python code.
 # ---------------------------------------------------------------------------
 RULES = """
+FUNCTION mother
+FUNCTION father
+FUNCTION son
+FUNCTION daughter
+FUNCTION brother
+FUNCTION sister
+
 ASK who is x
  ANSWER x
  IF y's mother is x
@@ -52,25 +67,26 @@ ASK who is x
  IF y's daughter is x
   TRUE
    ANSWER y's daughter
- IF x's father is y
+ IF y's brother is x
   TRUE
-   IF x is a boy
-    TRUE
-     ANSWER y's son
-    FALSE
-     ANSWER y's daughter
- IF x's mother is y
+   ANSWER y's brother
+ IF y's sister is x
   TRUE
-   IF x is a boy
-    TRUE
-     ANSWER y's son
-    FALSE
-     ANSWER y's daughter
+   ANSWER y's sister
 
-FUNCTION mother
-FUNCTION father
-FUNCTION son
-FUNCTION daughter
+ASSERT i am not you
+
+IF x's father is y's father
+ TRUE
+  IF x's mother is y's mother
+   TRUE
+    IF x is y
+     FALSE
+      IF x is a girl
+       TRUE
+        ASSERT y's sister is x
+       FALSE
+        ASSERT y's brother is x
 
 IF x is mary
  TRUE
@@ -128,7 +144,19 @@ IF x is y's daughter
  TRUE
   ASSERT x is a girl
   ASSERT x is not a boy
+
+IF x is y's brother
+ TRUE
+  ASSERT x is a boy
+  ASSERT x is not a girl
+
+IF x is y's sister
+ TRUE
+  ASSERT x is a girl
+  ASSERT x is not a boy
 """
+
+
 def parse(s):
     lines = [
         (len(x) - len(x.lstrip()), x.strip())
@@ -236,6 +264,18 @@ def valid_actor_eq(eq):
     return True
 
 
+def swap_pronouns(node):
+    """Speaker/listener swap: i <-> you (the table stores the user's view)."""
+    if not isinstance(node, TreeNode):
+        return node
+    name = node.name
+    if name == "i":
+        name = "you"
+    elif name == "you":
+        name = "i"
+    return TreeNode(name, [swap_pronouns(c) for c in node.children])
+
+
 class TableEntry:
     def __init__(self, entry=None, attr=None, rel=None):
         self.entry = entry if entry else []   # names that refer to this entity
@@ -329,11 +369,11 @@ class Table:
         ent = self.table_entry_list[self._find(a)]
         return {self._find(i) for i in ent.rel.get(name, ())}
 
-    def create_node(self, node, create=False):
+    def create_node(self, node, create=CREATE_NONE):
         """
-        Resolve an expression to an entity id.
-        create=True  (statements): unknown names and function values are created.
-        create=False (rules)     : nothing is created; unknown -> None.
+        Resolve an expression to an entity id (None if unknown).
+        create >= CREATE_LINK: missing function values (i's sister) are created.
+        create >= CREATE_ALL : unknown names are created too.
         """
         if node.name.startswith("d_"):
             return self._find(int(node.name[2:]))
@@ -341,7 +381,7 @@ class Table:
             for key, ent in self.table_entry_list.items():
                 if node in ent.entry:
                     return key
-            if not create:
+            if create < CREATE_ALL:
                 return None
             out = self.create()
             self.table_entry_list[out].entry.append(node)
@@ -353,7 +393,7 @@ class Table:
             ent = self.table_entry_list[self._find(base)]
             if node.name in ent.attr:
                 return self._find(ent.attr[node.name])
-            if create:
+            if create >= CREATE_LINK:
                 new = self.create()
                 ent.attr[node.name] = new
                 return new
@@ -364,6 +404,8 @@ class Table:
         a, b = self._find(a), self._find(b)
         if a == b:
             return a
+        if b in self._targets(a, NE):
+            raise Contradiction("known to be different")
         keep, drop = min(a, b), max(a, b)
         q = self.table_entry_list.pop(drop)
         self.alias[drop] = keep
@@ -404,7 +446,7 @@ class Table:
             and all(valid_actor_eq(c) for c in eq.children)
         )
 
-    def _assert_expr(self, eq, positive=True, create=False):
+    def _assert_expr(self, eq, positive=True, create=CREATE_LINK):
         """
         Add a fact. Returns True if something was recorded, False if the
         fact could not be expressed (skipped). Raises Contradiction on conflict.
@@ -413,13 +455,18 @@ class Table:
             return self._assert_expr(eq.children[0], not positive, create)
 
         if eq.name == "equal" and len(eq.children) == 2:
-            if not positive:
-                return False                 # "a is not b" is not stored
             p = self.create_node(eq.children[0], create)
             q = self.create_node(eq.children[1], create)
             if p is None or q is None:
                 return False
-            self.equate_id(p, q)
+            p, q = self._find(p), self._find(q)
+            if positive:
+                self.equate_id(p, q)
+                return True
+            if p == q:
+                raise Contradiction("same entity asserted different")
+            self.table_entry_list[p].rel.setdefault(NE, set()).add(q)
+            self.table_entry_list[q].rel.setdefault(NE, set()).add(p)
             return True
 
         if len(eq.children) == 1:
@@ -443,7 +490,7 @@ class Table:
 
         return False
 
-    def _eval(self, eq, create=False):
+    def _eval(self, eq, create=CREATE_NONE):
         """Stored truth value of eq: True / False / None (unknown)."""
         if eq.name == "not" and len(eq.children) == 1:
             v = self._eval(eq.children[0], create)
@@ -454,8 +501,12 @@ class Table:
             q = self.create_node(eq.children[1], create)
             if p is None or q is None:
                 return None
-            # different ids are not proof of difference (open world)
-            return True if self._find(p) == self._find(q) else None
+            p, q = self._find(p), self._find(q)
+            if p == q:
+                return True
+            if q in self._targets(p, NE):
+                return False
+            return None          # open world: not proven different
 
         if len(eq.children) == 1:
             n = self.create_node(eq.children[0], create)
@@ -526,7 +577,10 @@ class Table:
             elif head == "THROW":
                 raise Contradiction("THROW")
             elif head == "ASSERT":
-                self._assert_expr(self._bind(rule[1], x, y))
+                # rules may create links (i's sister) but never new names
+                self._assert_expr(
+                    self._bind(rule[1], x, y), True, CREATE_LINK
+                )
 
     def _signature(self):
         return str(self)
@@ -569,7 +623,7 @@ class Table:
             return None
         snap = self._snapshot()
         try:
-            if not self._assert_expr(eq, True, create=True):
+            if not self._assert_expr(eq, True, CREATE_ALL):
                 self._restore(snap)
                 return None
             self._propagate()
@@ -597,9 +651,9 @@ class Table:
 
     def _decide(self, eq):
         self._propagate()
-        self._eval(eq, create=True)      # materialise the names it mentions
+        self._eval(eq, CREATE_ALL)       # materialise the names it mentions
         self._propagate()                # let rules say things about them
-        v = self._eval(eq, create=True)
+        v = self._eval(eq, CREATE_ALL)
         if v is not None:
             return v
         return self._refute(eq)
@@ -614,14 +668,11 @@ class Table:
             return None if r is None else (not r)
 
         can_true = self._consistent(
-            lambda: self._assert_expr(eq, True, create=True)
+            lambda: self._assert_expr(eq, True, CREATE_ALL)
         )
-        if eq.name == "equal":
-            can_false = True             # distinctness is never forced by storage
-        else:
-            can_false = self._consistent(
-                lambda: self._assert_expr(eq, False, create=True)
-            )
+        can_false = self._consistent(
+            lambda: self._assert_expr(eq, False, CREATE_ALL)
+        )
         if can_true and not can_false:
             return True
         if can_false and not can_true:
@@ -640,7 +691,7 @@ class Table:
         snap = self._snapshot()
         try:
             self._propagate()
-            out = self.create_node(eq.children[0], create=True)
+            out = self.create_node(eq.children[0], CREATE_ALL)
             if out is None:
                 return None
             self._propagate()
@@ -658,30 +709,11 @@ class Table:
             for item in answers:
                 if not var_in_eq(item):
                     continue
-                
-                # --- Tree-level pronoun swapping ---
-                def swap_pronouns(node):
-                    if not isinstance(node, TreeNode):
-                        return node
-                    name = node.name
-                    if name == "i":
-                        new_name = "you"
-                    elif name == "you":
-                        new_name = "i"
-                    else:
-                        new_name = name
-                    
-                    new_children = [swap_pronouns(c) for c in node.children]
-                    return TreeNode(new_name, new_children)
-
                 item = swap_pronouns(item)
-                # -----------------------------------
-
                 try:
                     p = actor_to_phrase(item)
                 except Exception:
                     continue
-
                 if p not in phrases:
                     phrases.append(p)
             return phrases

@@ -91,24 +91,26 @@ from englishai.version2 import Table, code
 t = Table()
 t.context(code("john is your father"))
 t.context(code("mary is your mother"))
+t.context(code("john is my father"))
+t.context(code("mary is my mother"))
 t.context(code("you are a girl"))
-print("Who are you?", t.ask(code("who are you")))
-print("Who is John?", t.ask(code("who is john")))
-print("Who is Mary?", t.ask(code("who is mary")))
-print("Is John a boy?", t.question(code("is john a boy")))
-print("Is Mary a girl?", t.question(code("is mary a girl")))
-print("Are you John's son?", t.question(code("are you john's son")))
-print("Is Mary your mother?", t.question(code("is mary your mother")))
+print(t.ask(code("who are you")))
+print(t.ask(code("who is john")))
+print(t.ask(code("who is mary")))
+print(t.question(code("is john a boy")))
+print(t.question(code("is mary a girl")))
+print(t.question(code("are you john's son")))
+print(t.question(code("is mary your mother")))
 ```
 
 ## Output of the code
 
 ```
-Who are you? ['i', "john's daughter", "mary's daughter"]
-Who is John? ['john', 'my father']
-Who is Mary? ['mary', 'my mother']
-Is John a boy? True
-Is Mary a girl? True
-Are you John's son? False
-Is Mary your mother? True
+['i', "john's daughter", "mary's daughter", 'your sister']
+['john', 'my father', 'your father']
+['mary', 'my mother', 'your mother']
+True
+True
+False
+True
 ```
