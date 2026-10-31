@@ -88,29 +88,142 @@ ANSWER: yes
 
 ```py
 from englishai.version2 import Table, code
-t = Table()
-t.context(code("john is your father"))
-t.context(code("mary is your mother"))
-t.context(code("john is my father"))
-t.context(code("mary is my mother"))
-t.context(code("you are a girl"))
-print(t.ask(code("who are you")))
-print(t.ask(code("who is john")))
-print(t.ask(code("who is mary")))
-print(t.question(code("is john a boy")))
-print(t.question(code("is mary a girl")))
-print(t.question(code("are you john's son")))
-print(t.question(code("is mary your mother")))
+def run_test_suite(name, suite_text):
+    print(f"=== RUNNING TEST SUITE: {name} ===")
+    t = Table()
+    section = None    
+    for line in suite_text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.upper() == "CONTEXT:":
+            section = "CONTEXT"
+            continue
+        elif line.upper() == "QUESTIONS:":
+            section = "QUESTIONS"
+            continue            
+        if section == "CONTEXT":
+            res = t.context(code(line))
+            print(f"Context added [{line}]: {res}")
+        elif section == "QUESTIONS":
+            eq = code(line)
+            res = None
+            if eq.name == "who":
+                res = t.ask(eq)
+            else:
+                res = t.question(eq)
+            print(f"Q: {line}\n  -> {res}\n")
+    print("\n")
+suites = {
+    "Basic Family & Identity": """
+CONTEXT:
+john is your father
+mary is your mother
+you are my sister
+i am a boy
+
+QUESTIONS:
+who am i
+who are you
+who is john
+who is mary
+is john a boy
+is mary a girl
+are you john's son
+is mary your mother
+am i your brother
+""",
+    "Sibling Derivation": """
+CONTEXT:
+john is your father
+mary is your mother
+john is my father
+mary is my mother
+you are a girl
+
+QUESTIONS:
+who is my sister
+who is my brother
+""",
+    "Gender Mutual Exclusivity": """
+CONTEXT:
+alice is a girl
+bob is a boy
+
+QUESTIONS:
+is alice a boy
+is bob a girl
+is alice a girl
+is bob a boy
+"""
+}
+for name, text in suites.items():
+    run_test_suite(name, text)
 ```
 
 ## Output of the code
 
 ```
-['i', "john's daughter", "mary's daughter", 'your sister']
-['john', 'my father', 'your father']
-['mary', 'my mother', 'your mother']
-True
-True
-False
-True
+=== RUNNING TEST SUITE: Basic Family & Identity ===
+Context added [john is your father]: True
+Context added [mary is your mother]: True
+Context added [you are my sister]: True
+Context added [i am a boy]: True
+Q: who am i
+  -> ['you', "john's son", 'my brother', "mary's son"]
+
+Q: who are you
+  -> ['i', "john's daughter", "mary's daughter", 'your sister']
+
+Q: who is john
+  -> ['john', 'my father', 'your father']
+
+Q: who is mary
+  -> ['mary', 'my mother', 'your mother']
+
+Q: is john a boy
+  -> True
+
+Q: is mary a girl
+  -> True
+
+Q: are you john's son
+  -> False
+
+Q: is mary your mother
+  -> True
+
+Q: am i your brother
+  -> True
+
+
+
+=== RUNNING TEST SUITE: Sibling Derivation ===
+Context added [john is your father]: True
+Context added [mary is your mother]: True
+Context added [john is my father]: True
+Context added [mary is my mother]: True
+Context added [you are a girl]: True
+Q: who is my sister
+  -> ['i', "john's daughter", "mary's daughter", 'your sister']
+
+Q: who is my brother
+  -> ["john's son", "mary's son", 'your brother']
+
+
+
+=== RUNNING TEST SUITE: Gender Mutual Exclusivity ===
+Context added [alice is a girl]: True
+Context added [bob is a boy]: True
+Q: is alice a boy
+  -> False
+
+Q: is bob a girl
+  -> False
+
+Q: is alice a girl
+  -> True
+
+Q: is bob a boy
+  -> True
 ```

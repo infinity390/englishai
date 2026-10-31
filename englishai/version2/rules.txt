@@ -1,0 +1,130 @@
+FUNCTION mother
+FUNCTION father
+FUNCTION son
+FUNCTION daughter
+FUNCTION brother
+FUNCTION sister
+
+ASK who is x
+ ANSWER x
+ IF y's mother is x
+  TRUE
+   ANSWER y's mother
+ IF y's father is x
+  TRUE
+   ANSWER y's father
+ IF y's son is x
+  TRUE
+   ANSWER y's son
+ IF y's daughter is x
+  TRUE
+   ANSWER y's daughter
+ IF y's brother is x
+  TRUE
+   ANSWER y's brother
+ IF y's sister is x
+  TRUE
+   ANSWER y's sister
+
+ASSERT i am not you
+
+IF x's father is y's father
+ TRUE
+  IF x's mother is y's mother
+   TRUE
+    IF x is y
+     FALSE
+      IF x is a girl
+       TRUE
+        ASSERT y's sister is x
+       FALSE
+        ASSERT y's brother is x
+
+IF x is mary
+ TRUE
+  ASSERT x is a girl
+  ASSERT x is not a boy
+IF x is john
+ TRUE
+  ASSERT x is a boy
+  ASSERT x is not a girl
+IF x is alice
+ TRUE
+  ASSERT x is a girl
+  ASSERT x is not a boy
+IF x is bob
+ TRUE
+  ASSERT x is a boy
+  ASSERT x is not a girl
+
+IF x is a girl
+ TRUE
+  ASSERT x is not a boy
+ FALSE
+  ASSERT x is a boy
+
+IF x is a boy
+ TRUE
+  ASSERT x is not a girl
+ FALSE
+  ASSERT x is a girl
+
+IF x is y's mother
+ TRUE
+  ASSERT x is a girl
+  ASSERT x is not a boy
+
+IF x is y's father
+ TRUE
+  ASSERT x is a boy
+  ASSERT x is not a girl
+
+IF x is y's mother
+ TRUE
+  IF y is a boy
+   TRUE
+    ASSERT y is x's son
+   FALSE
+    ASSERT y is x's daughter
+
+IF x is y's father
+ TRUE
+  IF y is a boy
+   TRUE
+    ASSERT y is x's son
+   FALSE
+    ASSERT y is x's daughter
+
+IF x is y's son
+ TRUE
+  ASSERT x is a boy
+  ASSERT x is not a girl
+
+IF x is y's daughter
+ TRUE
+  ASSERT x is a girl
+  ASSERT x is not a boy
+
+IF x is y's brother
+ TRUE
+  ASSERT x is a boy
+  ASSERT x is not a girl
+  ASSERT x's father is y's father
+  ASSERT x's mother is y's mother
+  IF y is a boy
+   TRUE
+    ASSERT y is x's brother
+   FALSE
+    ASSERT y is x's sister
+
+IF x is y's sister
+ TRUE
+  ASSERT x is a girl
+  ASSERT x is not a boy
+  ASSERT x's father is y's father
+  ASSERT x's mother is y's mother
+  IF y is a boy
+   TRUE
+    ASSERT y is x's brother
+   FALSE
+    ASSERT y is x's sister
