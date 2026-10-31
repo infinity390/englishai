@@ -88,6 +88,28 @@ IF x's father is y's father
        FALSE
         ASSERT y's brother is x
 
+IF x is y's sister
+ TRUE
+  ASSERT x is not y
+  ASSERT x's father is y's father
+  ASSERT x's mother is y's mother
+  IF y is a boy
+   TRUE
+    ASSERT y is x's brother
+   FALSE
+    ASSERT y is x's sister
+
+IF x is y's brother
+ TRUE
+  ASSERT x is not y
+  ASSERT x's father is y's father
+  ASSERT x's mother is y's mother
+  IF y is a boy
+   TRUE
+    ASSERT y is x's brother
+   FALSE
+    ASSERT y is x's sister
+
 IF x is mary
  TRUE
   ASSERT x is a girl
