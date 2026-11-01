@@ -5,6 +5,8 @@ RELATION daughter
 RELATION brother
 RELATION sister
 
+FACTIVE know
+
 DISTINCT i you mary john alice bob
 
 ASK who is x
@@ -156,3 +158,11 @@ IF x is alive
 IF x kills y
  TRUE
   ASSERT y is dead
+  ASSERT x knows that x kills y
+  ASSERT x knows that y is dead
+
+IF x knows that y knows that z is dead
+ TRUE
+  ASSERT x knows that z is dead
+  ASSERT y knows that z is dead
+  ASSERT z is dead

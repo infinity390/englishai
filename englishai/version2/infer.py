@@ -9,6 +9,8 @@ CREATE_NONE = 0   # lookup only (rule conditions)
 CREATE_LINK = 1   # may create function values, e.g. i's sister (rule ASSERTs)
 CREATE_ALL = 2    # may also create new named entities (statements, questions)
 
+VARS = ("x", "y", "z", "w")   # rule variables; each ranges over entities
+
 NE = "!="         # rel key: ids an entity is known to differ from (hard fact)
 SOFT = "~="       # rel key: ids assumed different because of their names (default)
 
@@ -39,6 +41,8 @@ class Condition:
 #
 #   FUNCTION name      one-valued link: every x has at most one (mother, father)
 #   RELATION name      many-valued link: x may have several (sister, son, ...)
+#   FACTIVE name       attitude whose content is true: x knows that P  =>  P
+#   ATTITUDE name      attitude that only records what x holds (no truth)
 #   DISTINCT a b c     different names, different people, unless a statement
 #                      says otherwise ("i am bob" is accepted, rules cannot
 #                      merge them)
@@ -99,7 +103,7 @@ def parse(s):
                 result.append(("ASK", code(expr), children))
             else:
                 head, *sentence = text.split(maxsplit=1)
-                if head in ("FUNCTION", "RELATION", "DISTINCT"):
+                if head in ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE"):
                     # raw name, not an expression
                     result.append((head, sentence[0] if sentence else None))
                 elif sentence:
@@ -176,10 +180,11 @@ def swap_pronouns(node):
 
 
 class TableEntry:
-    def __init__(self, entry=None, attr=None, rel=None):
+    def __init__(self, entry=None, attr=None, rel=None, know=None):
         self.entry = entry if entry else []   # names that refer to this entity
         self.attr = attr if attr else {}      # unary facts / function links
         self.rel = rel if rel else {}         # binary facts: name -> {ids}
+        self.know = know if know else {}      # attitude -> [propositions]
 
     def __repr__(self):
         line = "+" + "-" * 60 + "+"
@@ -188,6 +193,9 @@ class TableEntry:
             s += f"{key} : {item}\n"
         for key, item in sorted(self.rel.items()):
             s += f"{key} -> {sorted(item)}\n"
+        for key, item in sorted(self.know.items()):
+            for text in sorted(repr(p) for p in item):
+                s += f"{key} that {text}\n"
         s += line + "\n"
         s += "| Entries\n"
         if len(self.entry) == 0:
@@ -209,6 +217,8 @@ class Table:
         self.rule = parse(rules)
         self.functions = self._declared("FUNCTION")
         self.relations = self._declared("RELATION")
+        self.factive = self._declared("FACTIVE")
+        self.attitudes = self._declared("ATTITUDE") | self.factive
         self.distinct_groups = [
             r[1].split()
             for r in self.rule
@@ -216,8 +226,8 @@ class Table:
         ]
         # rules that are run to a fixed point (everything except templates)
         self.inference_rules = [
-            r for r in self.rule
-            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT"))
+            (r, self._rule_vars(r)) for r in self.rule
+            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE"))
         ]
 
     def _declared(self, head):
@@ -270,11 +280,65 @@ class Table:
                 return True
         return False
 
+    def _prop_key(self, eq, create=CREATE_NONE):
+        """
+        Canonical form of a proposition, with every entity replaced by its
+        current id, so that "john killed mary" is recognised however john and
+        mary were named, and survives merges.
+        """
+        is_term = (not eq.children) or (
+            eq.name in self.functions and len(eq.children) == 1
+        )
+        if is_term:
+            i = self.create_node(eq, create)
+            if i is not None:
+                return ("e", self._find(i))
+            return ("?", repr(eq))
+        keys = [self._prop_key(c, create) for c in eq.children]
+        if eq.name == "equal":
+            keys.sort(key=repr)
+        return (eq.name, tuple(keys))
+
+    def _knows(self, ent, name, prop_key):
+        return any(
+            self._prop_key(t) == prop_key for t in ent.know.get(name, [])
+        )
+
+    def _expr_vars(self, node):
+        """Rule variables (x, y, z, w) occurring in an expression."""
+        out = set()
+        if not node.children and node.name in VARS:
+            out.add(node.name)
+        for c in node.children:
+            out |= self._expr_vars(c)
+        return out
+
+    def _rule_vars(self, rule):
+        """Variables a rule uses, in VARS order."""
+        found = set()
+
+        def walk(r):
+            if isinstance(r, list):
+                for item in r:
+                    walk(item)
+            elif isinstance(r, Condition):
+                found.update(self._expr_vars(r.expr))
+                walk(r.true)
+                walk(r.false)
+                walk(r.unknown)
+            elif isinstance(r, tuple):
+                for part in r[1:]:
+                    if isinstance(part, list):
+                        walk(part)
+                    elif isinstance(part, TreeNode):
+                        found.update(self._expr_vars(part))
+
+        walk(rule)
+        return [v for v in VARS if v in found]
+
     def _has_free_var(self, node):
-        """True if the template variables x / y are still present in node."""
-        if not node.children and node.name in ("x", "y"):
-            return True
-        return any(self._has_free_var(c) for c in node.children)
+        """True if a template variable (x, y, z, w) is still present in node."""
+        return bool(self._expr_vars(node))
 
     def _is_rel(self, node):
         """r(z) where r is a RELATION: a set of entities, not one entity."""
@@ -394,6 +458,10 @@ class Table:
                 p.entry.append(e)
         for name, targets in q.rel.items():
             p.rel.setdefault(name, set()).update(targets)
+        for name, props in q.know.items():
+            for t in props:
+                if not self._knows(p, name, self._prop_key(t)):
+                    p.know.setdefault(name, []).append(t)
 
         for key, val in q.attr.items():
             keep = self._find(keep)
@@ -419,6 +487,11 @@ class Table:
     def _wellformed(self, eq):
         if eq.name == "not" and len(eq.children) == 1:
             return self._wellformed(eq.children[0])
+        if eq.name in self.attitudes and len(eq.children) == 2:
+            return (
+                valid_actor_eq(eq.children[0])
+                and self._wellformed(eq.children[1])
+            )
         return (
             len(eq.children) in (1, 2)
             and all(valid_actor_eq(c) for c in eq.children)
@@ -431,6 +504,21 @@ class Table:
         """
         if eq.name == "not" and len(eq.children) == 1:
             return self._assert_expr(eq.children[0], not positive, create)
+
+        if eq.name in self.attitudes and len(eq.children) == 2:
+            if not positive:
+                return False                     # "x does not know P" not stored
+            who = self.create_node(eq.children[0], create)
+            if who is None:
+                return False
+            prop = eq.children[1]
+            if eq.name in self.factive:
+                self._assert_expr(prop, True, create)   # may raise Contradiction
+            ent = self.table_entry_list[self._find(who)]
+            key = self._prop_key(prop, create)
+            if not self._knows(ent, eq.name, key):
+                ent.know.setdefault(eq.name, []).append(prop)
+            return True
 
         if eq.name == "equal" and len(eq.children) == 2:
             if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
@@ -487,6 +575,14 @@ class Table:
             v = self._eval(eq.children[0], create)
             return None if v is None else (not v)
 
+        if eq.name in self.attitudes and len(eq.children) == 2:
+            who = self.create_node(eq.children[0], create)
+            if who is None:
+                return None
+            key = self._prop_key(eq.children[1], create)
+            ent = self.table_entry_list[self._find(who)]
+            return True if self._knows(ent, eq.name, key) else None
+
         if eq.name == "equal" and len(eq.children) == 2:
             if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
                 sp = self._split_rel(eq)
@@ -535,55 +631,56 @@ class Table:
     # ------------------------------------------------------------------
     # rule engine
     # ------------------------------------------------------------------
-    def _bind(self, eq, x, y):
-        eq = replace(eq, TreeNode("x"), TreeNode(f"d_{x}"))
-        return replace(eq, TreeNode("y"), TreeNode(f"d_{y}"))
+    def _bind(self, eq, env):
+        """Replace each bound variable by a reference to its entity."""
+        for var, ident in env.items():
+            eq = replace(eq, TreeNode(var), TreeNode(f"d_{ident}"))
+        return eq
 
-    def _answers(self, body, x, y):
-        xs = self.find_id(x) or [None]
-        ys = self.find_id(y) or [None]
+    def _answers(self, body, env):
+        used = [v for v in VARS if v in env and v in self._expr_vars(body)]
+        lists = [self.find_id(env[v]) or [None] for v in used]
         out = []
-        for a in xs:
-            for b in ys:
-                item = body
-                if a is not None:
-                    item = replace(item, TreeNode("x"), a)
-                if b is not None:
-                    item = replace(item, TreeNode("y"), b)
-                out.append(item)
+        for combo in itertools.product(*lists):
+            item = body
+            for var, name in zip(used, combo):
+                if name is not None:
+                    item = replace(item, TreeNode(var), name)
+            out.append(item)
         return out
 
-    def process_rule(self, rule, x=None, y=None, answers=None):
+    def process_rule(self, rule, env=None, answers=None):
         """
-        Run one rule with x, y bound to entity ids.
+        Run one rule with its variables bound by env ({"x": id, "y": id, ...}).
         Effects are applied to the table; ANSWERs are appended to `answers`.
         Raises Contradiction on THROW or conflicting facts.
         """
+        env = env or {}
         if isinstance(rule, list):
             for item in rule:
-                self.process_rule(item, x, y, answers)
+                self.process_rule(item, env, answers)
         elif isinstance(rule, Condition):
-            v = self._eval(self._bind(rule.expr, x, y))
+            v = self._eval(self._bind(rule.expr, env))
             if v is True:
                 branch = rule.true
             elif v is False:
                 branch = rule.false
             else:
                 branch = rule.unknown
-            self.process_rule(branch, x, y, answers)
+            self.process_rule(branch, env, answers)
         elif isinstance(rule, tuple):
             head = rule[0]
             if head == "ASK":
-                self.process_rule(rule[2], x, y, answers)
+                self.process_rule(rule[2], env, answers)
             elif head == "ANSWER":
                 if answers is not None and rule[1] is not None:
-                    answers.extend(self._answers(rule[1], x, y))
+                    answers.extend(self._answers(rule[1], env))
             elif head == "THROW":
                 raise Contradiction("THROW")
             elif head == "ASSERT":
                 # rules may create links (i's sister) but never new names
                 self._assert_expr(
-                    self._bind(rule[1], x, y), True, CREATE_LINK
+                    self._bind(rule[1], env), True, CREATE_LINK
                 )
 
     def _signature(self):
@@ -595,14 +692,12 @@ class Table:
             self._apply_distinct()
             before = self._signature()
             ids = list(self.table_entry_list.keys())
-            for rule in self.inference_rules:
-                for x in ids:
-                    if x not in self.table_entry_list:
+            for rule, variables in self.inference_rules:
+                # only the variables a rule really uses are enumerated
+                for combo in itertools.product(ids, repeat=len(variables)):
+                    if any(i not in self.table_entry_list for i in combo):
                         continue
-                    for y in ids:
-                        if y not in self.table_entry_list:
-                            continue
-                        self.process_rule(rule, x, y)
+                    self.process_rule(rule, dict(zip(variables, combo)))
             if self._signature() == before:
                 return
         raise RuntimeError("rules did not reach a fixed point")
@@ -719,8 +814,10 @@ class Table:
                         and rule[0] == "ASK"
                         and rule[1].name == "who"
                     ):
-                        for other in ids:
-                            self.process_rule(rule, out, other, answers)
+                        others = [v for v in self._rule_vars(rule) if v != "x"]
+                        for combo in itertools.product(ids, repeat=len(others)):
+                            env = {"x": out, **dict(zip(others, combo))}
+                            self.process_rule(rule, env, answers)
             phrases = []
             for item in answers:
                 if self._has_free_var(item) or not var_in_eq(item):

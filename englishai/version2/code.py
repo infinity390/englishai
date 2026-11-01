@@ -62,7 +62,7 @@ def parse_noun_phrase(words):
         "james",
         "sarah",
         "emma",
-        "x", "y"
+        "x", "y", "z", "w"
     }
     pronoun_map = {
         "your": "you",
@@ -304,7 +304,7 @@ VERB_VOCAB = {
     "come", "do", "have",
     "walk", "study", "kill", "want",
     "love", "hate", "help",
-    "tell", "say",
+    "tell", "say", "know", "knew", "known",
     "ate", "went", "gone", "told", "tells",
     "saw", "seen",
     "gave", "given",
@@ -331,6 +331,8 @@ VERB_IRREGULAR = {
     "ran": ("run", "past"),
     "told": ("tell", "past"),
     "said": ("say", "past"),
+    "knew": ("know", "past"),
+    "known": ("know", "past"),
     "tells": ("tell", "present", ["3rd"], "singular"),
     "says": ("say", "present", ["3rd"], "singular"),
     "died": ("die", "past"),
@@ -428,6 +430,10 @@ def parse_verb(words):
     raise ValueError(
         f"Invalid verb vocabulary: {verb}"
     )
+
+
+# verbs that take "that <sentence>": know(john, die(mary))
+ATTITUDE_VERBS = {"know"}
 
 
 VALID_NOUNS = {
@@ -719,6 +725,29 @@ def infer_equation2(split, funcs):
     if split[0] != ["who"] and combine_features(split[:2], funcs[:2])["valid"] is False:
         return None
     last_actor = None
+    if funcs == ["actor", "verb", "that", "sentence"]:
+        root = parse_verb(split[1])["root"]
+        if root in ATTITUDE_VERBS:
+            try:
+                inner = code(" ".join(split[3]))
+            except ValueError:
+                return None
+            if inner is None:
+                return None
+            return TreeNode(root, [actor(split[0])["tree"], inner])
+    if (
+        funcs == ["verb", "actor", "verb", "that", "sentence"]
+        and split[0][0].lower() in ("did", "does", "do")
+    ):
+        root = parse_verb(split[2])["root"]
+        if root in ATTITUDE_VERBS:
+            try:
+                inner = code(" ".join(split[4]))
+            except ValueError:
+                return None
+            if inner is None:
+                return None
+            return TreeNode(root, [actor(split[1])["tree"], inner]).fx("question")
     if funcs == ["aux", "actor", "actor"]:
         a1 = actor(split[1])["tree"]
         a2 = actor(split[2])["tree"]
@@ -800,8 +829,10 @@ def infer_equation(split, funcs):
 
 def code(sentence):
     words = sentence.split()
-    if "not" in [w.lower() for w in words]:
-        neg_index = [i for i, w in enumerate(words) if w.lower() == "not"][0]
+    lower = [w.lower() for w in words]
+    limit = lower.index("that") if "that" in lower else len(words)
+    if "not" in lower[:limit]:
+        neg_index = lower.index("not")
         sub_words = words[:neg_index] + words[neg_index + 1:]
         sub_code = code(" ".join(sub_words))
         if sub_code is not None:

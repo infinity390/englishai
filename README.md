@@ -156,6 +156,19 @@ alice's mother is mary
 
 QUESTIONS:
 is mary alive
+""",
+    "Knowledge Derivation": """
+CONTEXT:
+mary is my mother
+alice is my sister
+i killed alice's mother
+bob knows that john knows that my mother is dead
+
+QUESTIONS:
+does bob know that mary is dead
+does bob know that john know that mary is dead
+is mary alive
+do i know that mary is dead
 """
 }
 for name, text in suites.items():
@@ -224,4 +237,23 @@ Context added [alice is my sister]: True
 Context added [alice's mother is mary]: True
 Q: is mary alive
   -> False
+
+
+
+=== RUNNING TEST SUITE: Knowledge Derivation ===
+Context added [mary is my mother]: True
+Context added [alice is my sister]: True
+Context added [i killed alice's mother]: True
+Context added [bob knows that john knows that my mother is dead]: True
+Q: does bob know that mary is dead
+  -> True
+
+Q: does bob know that john know that mary is dead
+  -> True
+
+Q: is mary alive
+  -> False
+
+Q: do i know that mary is dead
+  -> True
 ```
