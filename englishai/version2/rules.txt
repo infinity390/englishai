@@ -168,13 +168,3 @@ IF x kills y
   ASSERT y is dead
   ASSERT x knows that x kills y
   ASSERT x knows that y is dead
-
-IF x knows that y knows that z is dead
- TRUE
-  ASSERT x knows that z is dead
-  ASSERT y knows that z is dead
-  ASSERT z is dead
-
-IF x wants to kill y
- TRUE
-  ASSERT x knows that x wants to kill y
