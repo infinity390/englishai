@@ -9,7 +9,8 @@ CREATE_NONE = 0   # lookup only (rule conditions)
 CREATE_LINK = 1   # may create function values, e.g. i's sister (rule ASSERTs)
 CREATE_ALL = 2    # may also create new named entities (statements, questions)
 
-NE = "!="         # rel key holding the ids an entity is known to differ from
+NE = "!="         # rel key: ids an entity is known to differ from (hard fact)
+SOFT = "~="       # rel key: ids assumed different because of their names (default)
 
 
 class Contradiction(Exception):
@@ -38,6 +39,9 @@ class Condition:
 #
 #   FUNCTION name      one-valued link: every x has at most one (mother, father)
 #   RELATION name      many-valued link: x may have several (sister, son, ...)
+#   DISTINCT a b c     different names, different people, unless a statement
+#                      says otherwise ("i am bob" is accepted, rules cannot
+#                      merge them)
 #   IF expr            branches TRUE / FALSE / UNKNOWN
 #   ASSERT expr        add a fact           (expr may be "not ...")
 #   THROW              contradiction
@@ -49,6 +53,8 @@ class Condition:
 from pathlib import Path
 RULES_FILE = Path(__file__).parent / "rules.txt"
 RULES = RULES_FILE.read_text(encoding="utf-8")
+
+
 
 def parse(s):
     lines = [
@@ -93,7 +99,7 @@ def parse(s):
                 result.append(("ASK", code(expr), children))
             else:
                 head, *sentence = text.split(maxsplit=1)
-                if head in ("FUNCTION", "RELATION"):
+                if head in ("FUNCTION", "RELATION", "DISTINCT"):
                     # raw name, not an expression
                     result.append((head, sentence[0] if sentence else None))
                 elif sentence:
@@ -203,10 +209,15 @@ class Table:
         self.rule = parse(rules)
         self.functions = self._declared("FUNCTION")
         self.relations = self._declared("RELATION")
+        self.distinct_groups = [
+            r[1].split()
+            for r in self.rule
+            if isinstance(r, tuple) and r[0] == "DISTINCT" and r[1]
+        ]
         # rules that are run to a fixed point (everything except templates)
         self.inference_rules = [
             r for r in self.rule
-            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION"))
+            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT"))
         ]
 
     def _declared(self, head):
@@ -215,6 +226,49 @@ class Table:
             for r in self.rule
             if isinstance(r, tuple) and r[0] == head and r[1]
         }
+
+    def _apply_distinct(self):
+        """DISTINCT groups: entities with different names are assumed different."""
+        for group in self.distinct_groups:
+            owners = {}                       # name -> {entity ids}
+            for key, ent in self.table_entry_list.items():
+                for e in ent.entry:
+                    if not e.children and e.name in group:
+                        owners.setdefault(e.name, set()).add(key)
+            for a, b in itertools.combinations(sorted(owners), 2):
+                for p in owners[a]:
+                    for q in owners[b]:
+                        if p == q:
+                            continue          # explicitly said to be the same
+                        for u, v in ((p, q), (q, p)):
+                            self.table_entry_list[u].rel.setdefault(
+                                SOFT, set()
+                            ).add(v)
+
+    def _incompatible(self, p, q, seen=None):
+        """
+        True if merging p and q would certainly contradict: they carry opposite
+        unary facts (girl vs boy, dead vs alive, ...), are known to differ, or
+        their mothers/fathers/... are incompatible in turn.
+        """
+        p, q = self._find(p), self._find(q)
+        if p == q:
+            return False
+        seen = seen if seen is not None else set()
+        if (p, q) in seen or (q, p) in seen:
+            return False
+        seen.add((p, q))
+        if q in self._targets(p, NE) or q in self._targets(p, SOFT):
+            return True
+        a, b = self.table_entry_list[p], self.table_entry_list[q]
+        for key, val in a.attr.items():
+            if key in self.functions:
+                other = b.attr.get(key)
+                if other is not None and self._incompatible(val, other, seen):
+                    return True
+            elif b.attr.get(key) not in (None, val):
+                return True
+        return False
 
     def _has_free_var(self, node):
         """True if the template variables x / y are still present in node."""
@@ -318,13 +372,18 @@ class Table:
                 return new
         return None
 
-    def equate_id(self, a, b):
-        """Merge two entities (smaller id survives). Raises Contradiction."""
+    def equate_id(self, a, b, explicit=False):
+        """
+        Merge two entities (smaller id survives). Raises Contradiction.
+        explicit=True: the user said so; it may override a name-based default.
+        """
         a, b = self._find(a), self._find(b)
         if a == b:
             return a
         if b in self._targets(a, NE):
             raise Contradiction("known to be different")
+        if not explicit and b in self._targets(a, SOFT):
+            raise Contradiction("assumed different (different names)")
         keep, drop = min(a, b), max(a, b)
         q = self.table_entry_list.pop(drop)
         self.alias[drop] = keep
@@ -393,7 +452,7 @@ class Table:
                 return False
             p, q = self._find(p), self._find(q)
             if positive:
-                self.equate_id(p, q)
+                self.equate_id(p, q, explicit=(create >= CREATE_ALL))
                 return True
             if p == q:
                 raise Contradiction("same entity asserted different")
@@ -449,7 +508,7 @@ class Table:
             p, q = self._find(p), self._find(q)
             if p == q:
                 return True
-            if q in self._targets(p, NE):
+            if self._incompatible(p, q):
                 return False
             return None          # open world: not proven different
 
@@ -533,6 +592,7 @@ class Table:
     def _propagate(self):
         """Run all inference rules until nothing changes. Raises Contradiction."""
         for _ in range(self.MAX_ROUNDS):
+            self._apply_distinct()
             before = self._signature()
             ids = list(self.table_entry_list.keys())
             for rule in self.inference_rules:

@@ -5,6 +5,8 @@ RELATION daughter
 RELATION brother
 RELATION sister
 
+DISTINCT i you mary john alice bob
+
 ASK who is x
  ANSWER x
  IF y's mother is x
@@ -138,3 +140,19 @@ IF x is y's sister
     ASSERT y is x's brother
    FALSE
     ASSERT y is x's sister
+
+IF x is dead
+ TRUE
+  ASSERT x is not alive
+ FALSE
+  ASSERT x is alive
+
+IF x is alive
+ TRUE
+  ASSERT x is not dead
+ FALSE
+  ASSERT x is dead
+
+IF x kills y
+ TRUE
+  ASSERT y is dead

@@ -120,6 +120,7 @@ CONTEXT:
 john is your father
 mary is your mother
 you are my sister
+you are alice
 i am a boy
 
 QUESTIONS:
@@ -127,6 +128,7 @@ who am i
 who are you
 who is john
 who is mary
+who is alice's brother
 is john a boy
 is mary a girl
 are you john's son
@@ -140,21 +142,20 @@ mary is your mother
 john is my father
 mary is my mother
 you are a girl
+bob is your brother
 
 QUESTIONS:
 who is my sister
 who is my brother
 """,
-    "Gender Mutual Exclusivity": """
+    "Kill Derivation": """
 CONTEXT:
-alice is a girl
-bob is a boy
+i killed my mother
+alice is my sister
+alice's mother is mary
 
 QUESTIONS:
-is alice a boy
-is bob a girl
-is alice a girl
-is bob a boy
+is mary alive
 """
 }
 for name, text in suites.items():
@@ -168,18 +169,22 @@ for name, text in suites.items():
 Context added [john is your father]: True
 Context added [mary is your mother]: True
 Context added [you are my sister]: True
+Context added [you are alice]: True
 Context added [i am a boy]: True
 Q: who am i
-  -> ['you', "john's son", 'my brother', "mary's son"]
+  -> ['you', "john's son", 'my brother', "alice's brother", "mary's son"]
 
 Q: who are you
-  -> ['i', "john's daughter", "mary's daughter", 'your sister']
+  -> ['i', 'alice', "john's daughter", "mary's daughter", 'your sister']
 
 Q: who is john
-  -> ['john', 'my father', 'your father']
+  -> ['john', 'my father', "alice's father", 'your father']
 
 Q: who is mary
-  -> ['mary', 'my mother', 'your mother']
+  -> ['mary', 'my mother', "alice's mother", 'your mother']
+
+Q: who is alice's brother
+  -> ['you', "john's son", 'my brother', "alice's brother", "mary's son"]
 
 Q: is john a boy
   -> True
@@ -204,26 +209,19 @@ Context added [mary is your mother]: True
 Context added [john is my father]: True
 Context added [mary is my mother]: True
 Context added [you are a girl]: True
+Context added [bob is your brother]: True
 Q: who is my sister
-  -> ['i', "john's daughter", "mary's daughter", 'your sister']
+  -> ['i', "john's daughter", "mary's daughter", 'your sister', "bob's sister"]
 
 Q: who is my brother
-  -> []
+  -> ['bob', "john's son", 'my brother', "mary's son", 'your brother']
 
 
 
-=== RUNNING TEST SUITE: Gender Mutual Exclusivity ===
-Context added [alice is a girl]: True
-Context added [bob is a boy]: True
-Q: is alice a boy
+=== RUNNING TEST SUITE: Kill Derivation ===
+Context added [i killed my mother]: True
+Context added [alice is my sister]: True
+Context added [alice's mother is mary]: True
+Q: is mary alive
   -> False
-
-Q: is bob a girl
-  -> False
-
-Q: is alice a girl
-  -> True
-
-Q: is bob a boy
-  -> True
 ```

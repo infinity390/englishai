@@ -752,6 +752,15 @@ def infer_equation2(split, funcs):
         a = actor(split[1])["tree"]
         v = parse_category(split[2])["root"]
         return TreeNode(v, [a]).fx("question")
+    if funcs == ["aux", "actor", "adjective"]:
+        a = actor(split[1])["tree"]
+        return a.fx(parse_adjective(split[2])).fx("question")
+    if (
+        funcs == ["verb", "actor", "verb", "actor"]
+        and split[0][0].lower() in ("did", "does", "do")
+    ):
+        a, b = actor(split[1])["tree"], last_actor["tree"]
+        return TreeNode(parse_verb(split[2])["root"], [a, b]).fx("question")
     if funcs == ["actor", "aux", "not", "noun"]:
         lst = " ".join(split[0] + split[1] + split[3])
         return code(lst).fx("not")
