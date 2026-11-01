@@ -5,7 +5,15 @@ RELATION daughter
 RELATION brother
 RELATION sister
 
+# attitudes: what someone holds about a proposition
+# know is factive: "x knows that P" makes P true; think and want do not
 FACTIVE know
+# what a knower knows is closed under all the rules below
+CLOSED know
+ATTITUDE think
+ATTITUDE want
+# whoever knows P also thinks P
+ENTAILS know think
 
 DISTINCT i you mary john alice bob
 
@@ -166,3 +174,7 @@ IF x knows that y knows that z is dead
   ASSERT x knows that z is dead
   ASSERT y knows that z is dead
   ASSERT z is dead
+
+IF x wants to kill y
+ TRUE
+  ASSERT x knows that x wants to kill y

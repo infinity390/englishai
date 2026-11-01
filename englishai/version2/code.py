@@ -304,7 +304,7 @@ VERB_VOCAB = {
     "come", "do", "have",
     "walk", "study", "kill", "want",
     "love", "hate", "help",
-    "tell", "say", "know", "knew", "known",
+    "tell", "say", "know", "knew", "known", "think", "thought",
     "ate", "went", "gone", "told", "tells",
     "saw", "seen",
     "gave", "given",
@@ -333,6 +333,7 @@ VERB_IRREGULAR = {
     "said": ("say", "past"),
     "knew": ("know", "past"),
     "known": ("know", "past"),
+    "thought": ("think", "past"),
     "tells": ("tell", "present", ["3rd"], "singular"),
     "says": ("say", "present", ["3rd"], "singular"),
     "died": ("die", "past"),
@@ -432,8 +433,9 @@ def parse_verb(words):
     )
 
 
-# verbs that take "that <sentence>": know(john, die(mary))
-ATTITUDE_VERBS = {"know"}
+# verbs about what someone holds: know(john, die(mary)), want(john, kill(john, mary))
+# "john thinks that mary is dead", "john wants to kill mary"
+ATTITUDE_VERBS = {"know", "think", "want"}
 
 
 VALID_NOUNS = {
@@ -473,6 +475,10 @@ NON_NOUN_BLOCKLIST = {
 def parse_category(words):
     if not words:
         return None
+    # a noun is "girl" or "a girl"; longer chunks such as "mary is my mother"
+    # are sentences, not nouns (they only end in a noun)
+    if len(words) > 2 or (len(words) == 2 and words[0].lower() not in ("a", "an")):
+        raise ValueError(f"Invalid noun phrase: {' '.join(words)}")
     word = words[-1].lower()
     if word in NON_NOUN_BLOCKLIST:
         raise ValueError(f"Invalid noun (verb detected): {word}")
@@ -768,6 +774,21 @@ def infer_equation2(split, funcs):
         if actor(split[lst[0]])["tree"] == actor(split[lst[1]])["tree"] and last_actor["tree"].name in ["she", "he", "i", "we", "they", "you"]:
             if len(split[lst[1]][0]) <= 4 or split[lst[1]][0][-4:] != "self":
                 return None
+    if (
+        funcs in (
+            ["verb", "actor", "verb", "to", "verb"],
+            ["verb", "actor", "verb", "to", "verb", "actor"],
+        )
+        and split[0][0].lower() in ("did", "does", "do")
+        and parse_verb(split[2])["root"] in ATTITUDE_VERBS
+    ):
+        # does john want to kill mary / does john want to die
+        a1 = actor(split[1])["tree"]
+        v2 = parse_verb(split[4])["root"]
+        args = [a1] if len(funcs) == 5 else [a1, last_actor["tree"]]
+        return TreeNode(
+            parse_verb(split[2])["root"], [a1, TreeNode(v2, args)]
+        ).fx("question")
     if funcs == ["who", "aux", "actor"]:
         a = actor(split[2])["tree"]
         return a.fx("who")

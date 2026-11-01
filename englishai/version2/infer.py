@@ -10,6 +10,8 @@ CREATE_LINK = 1   # may create function values, e.g. i's sister (rule ASSERTs)
 CREATE_ALL = 2    # may also create new named entities (statements, questions)
 
 VARS = ("x", "y", "z", "w")   # rule variables; each ranges over entities
+KNOWER = "k"                  # internal variable of the lifted CLOSED rules
+ALL_VARS = VARS + (KNOWER,)
 
 NE = "!="         # rel key: ids an entity is known to differ from (hard fact)
 SOFT = "~="       # rel key: ids assumed different because of their names (default)
@@ -43,6 +45,10 @@ class Condition:
 #   RELATION name      many-valued link: x may have several (sister, son, ...)
 #   FACTIVE name       attitude whose content is true: x knows that P  =>  P
 #   ATTITUDE name      attitude that only records what x holds (no truth)
+#   ENTAILS a b        x a-s that P  =>  x b-s that P   (know => think)
+#   CLOSED name        x names that P, and the rules derive Q from P  =>  x names that Q
+#                      (every IF/ASSERT rule is re-run inside what x knows)
+#   lines starting with # are comments
 #   DISTINCT a b c     different names, different people, unless a statement
 #                      says otherwise ("i am bob" is accepted, rules cannot
 #                      merge them)
@@ -64,7 +70,7 @@ def parse(s):
     lines = [
         (len(x) - len(x.lstrip()), x.strip())
         for x in s.splitlines()
-        if x.strip()
+        if x.strip() and not x.strip().startswith("#")
     ]
 
     def parse_block(i, indent):
@@ -103,7 +109,7 @@ def parse(s):
                 result.append(("ASK", code(expr), children))
             else:
                 head, *sentence = text.split(maxsplit=1)
-                if head in ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE"):
+                if head in ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED"):
                     # raw name, not an expression
                     result.append((head, sentence[0] if sentence else None))
                 elif sentence:
@@ -218,7 +224,18 @@ class Table:
         self.functions = self._declared("FUNCTION")
         self.relations = self._declared("RELATION")
         self.factive = self._declared("FACTIVE")
-        self.attitudes = self._declared("ATTITUDE") | self.factive
+        self.entails = {}                  # attitude -> weaker attitudes it implies
+        for r in self.rule:
+            if isinstance(r, tuple) and r[0] == "ENTAILS" and r[1]:
+                strong, *weak = r[1].split()
+                self.entails.setdefault(strong, set()).update(weak)
+        mentioned = set(self.entails) | {
+            w for ws in self.entails.values() for w in ws
+        }
+        self.closed = self._declared("CLOSED")
+        self.attitudes = (
+            self._declared("ATTITUDE") | self.factive | mentioned | self.closed
+        )
         self.distinct_groups = [
             r[1].split()
             for r in self.rule
@@ -227,8 +244,17 @@ class Table:
         # rules that are run to a fixed point (everything except templates)
         self.inference_rules = [
             (r, self._rule_vars(r)) for r in self.rule
-            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE"))
+            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED"))
         ]
+        # the same rules, re-run inside what a knower knows (CLOSED attitudes)
+        self.lifted_rules = []
+        for att in sorted(self.closed):
+            for r, _ in self.inference_rules:
+                if isinstance(r, Condition) and not self._cond_mentions_attitude(r):
+                    lifted = self._lift_condition(r, att)
+                    self.lifted_rules.append(
+                        (lifted, self._rule_vars(lifted), att)
+                    )
 
     def _declared(self, head):
         return {
@@ -299,6 +325,16 @@ class Table:
             keys.sort(key=repr)
         return (eq.name, tuple(keys))
 
+    def _entailed(self, name):
+        """Every attitude implied by `name` (know => think => ...)."""
+        out, todo = set(), [name]
+        while todo:
+            for weaker in self.entails.get(todo.pop(), ()):
+                if weaker not in out and weaker != name:
+                    out.add(weaker)
+                    todo.append(weaker)
+        return out
+
     def _knows(self, ent, name, prop_key):
         return any(
             self._prop_key(t) == prop_key for t in ent.know.get(name, [])
@@ -307,7 +343,7 @@ class Table:
     def _expr_vars(self, node):
         """Rule variables (x, y, z, w) occurring in an expression."""
         out = set()
-        if not node.children and node.name in VARS:
+        if not node.children and node.name in ALL_VARS:
             out.add(node.name)
         for c in node.children:
             out |= self._expr_vars(c)
@@ -334,7 +370,66 @@ class Table:
                         found.update(self._expr_vars(part))
 
         walk(rule)
-        return [v for v in VARS if v in found]
+        return [v for v in ALL_VARS if v in found]
+
+    def _mentions_attitude(self, expr):
+        return expr.name in self.attitudes or any(
+            self._mentions_attitude(c) for c in expr.children
+        )
+
+    def _cond_mentions_attitude(self, cond):
+        """Does a condition (or one nested in its branches) test an attitude?"""
+        if self._mentions_attitude(cond.expr):
+            return True
+        return any(
+            self._cond_mentions_attitude(item)
+            for branch in (cond.true, cond.false, cond.unknown)
+            for item in branch
+            if isinstance(item, Condition)
+        )
+
+    def _lift_items(self, items, att):
+        out = []
+        for item in items:
+            if isinstance(item, Condition):
+                if not self._cond_mentions_attitude(item):
+                    out.append(self._lift_condition(item, att))
+            elif isinstance(item, tuple) and item[0] == "ASSERT":
+                # facts about what others know are not passed on any further
+                if not self._mentions_attitude(item[1]):
+                    out.append(
+                        ("ASSERT", TreeNode(att, [TreeNode(KNOWER), item[1]]))
+                    )
+        return out
+
+    def _lift_condition(self, cond, att):
+        """
+        IF E / TRUE a / FALSE b / UNKNOWN c   becomes, for a knower k:
+        IF k knows E: TRUE a;  otherwise IF k knows not E: FALSE b, else c;
+        and every ASSERT P becomes ASSERT k knows P.
+        """
+        def know(p):
+            return TreeNode(att, [TreeNode(KNOWER), p])
+
+        e = cond.expr
+        neg = (
+            e.children[0]
+            if e.name == "not" and len(e.children) == 1
+            else TreeNode("not", [e])
+        )
+        return Condition(
+            know(e),
+            self._lift_items(cond.true, att),
+            [],
+            [
+                Condition(
+                    know(neg),
+                    self._lift_items(cond.false, att),
+                    [],
+                    self._lift_items(cond.unknown, att),
+                )
+            ],
+        )
 
     def _has_free_var(self, node):
         """True if a template variable (x, y, z, w) is still present in node."""
@@ -516,8 +611,9 @@ class Table:
                 self._assert_expr(prop, True, create)   # may raise Contradiction
             ent = self.table_entry_list[self._find(who)]
             key = self._prop_key(prop, create)
-            if not self._knows(ent, eq.name, key):
-                ent.know.setdefault(eq.name, []).append(prop)
+            for name in [eq.name] + sorted(self._entailed(eq.name)):
+                if not self._knows(ent, name, key):
+                    ent.know.setdefault(name, []).append(prop)
             return True
 
         if eq.name == "equal" and len(eq.children) == 2:
@@ -698,6 +794,23 @@ class Table:
                     if any(i not in self.table_entry_list for i in combo):
                         continue
                     self.process_rule(rule, dict(zip(variables, combo)))
+            for rule, variables, att in self.lifted_rules:
+                knowers = [
+                    i for i, ent in self.table_entry_list.items()
+                    if ent.know.get(att)
+                ]
+                if not knowers:
+                    continue
+                base = [v for v in variables if v != KNOWER]
+                for combo in itertools.product(ids, repeat=len(base)):
+                    if any(i not in self.table_entry_list for i in combo):
+                        continue
+                    for kn in knowers:
+                        if kn not in self.table_entry_list:
+                            continue
+                        env = dict(zip(base, combo))
+                        env[KNOWER] = kn
+                        self.process_rule(rule, env)
             if self._signature() == before:
                 return
         raise RuntimeError("rules did not reach a fixed point")
