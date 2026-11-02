@@ -163,12 +163,14 @@ mary is my mother
 alice is my sister
 i killed alice's mother
 bob knows that john knows that my mother is dead
+i think that i killed alice
 
 QUESTIONS:
 does bob know that mary is dead
 does bob know that john know that mary is dead
 is mary alive
 do i know that mary is dead
+do i think that alice is not alive
 """
 }
 for name, text in suites.items():
@@ -245,6 +247,7 @@ Context added [mary is my mother]: True
 Context added [alice is my sister]: True
 Context added [i killed alice's mother]: True
 Context added [bob knows that john knows that my mother is dead]: True
+Context added [i think that i killed alice]: True
 Q: does bob know that mary is dead
   -> True
 
@@ -255,5 +258,8 @@ Q: is mary alive
   -> False
 
 Q: do i know that mary is dead
+  -> True
+
+Q: do i think that alice is not alive
   -> True
 ```

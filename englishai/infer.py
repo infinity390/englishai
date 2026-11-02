@@ -2,538 +2,52 @@ from .base import *
 import itertools
 import copy
 from .decode import *
+
+
+class Contradiction(Exception):
+    """Raised internally when a statement conflicts with what the table holds."""
+
+
 def id_helper(a, b):
     a = set(a)
     b = set(b)
-    a, b = a-b, b-a
+    a, b = a - b, b - a
     if len(a) == 1 and len(b) == 1:
         return list(a)[0], list(b)[0]
     return None
+
+
 def collect_id_nodes(node):
     out = []
-    if (
-        isinstance(node, TreeNode)
-        and node.name == "id"
-    ):
+    if isinstance(node, TreeNode) and node.name == "id":
         out.append(node)
     for child in getattr(node, "children", []):
         out.extend(collect_id_nodes(child))
     return out
+
+
 def valid_actor_eq(eq):
     try:
-        eq = actor_to_phrase(eq)
-    except:
+        actor_to_phrase(eq)
+    except Exception:
         return False
     return True
-class Table:
-    def __init__(self):
-        self.id_system = []
-        self.table_entry_list = {}
-        self.curr = 0
-        self.create_new_nodes = True
-    def find_human(self, curr_id=None, step=[], create_new=True):
-        if create_new:
-            create_new = self.create_new_nodes
-        item = None
-        if curr_id is not None:
-            if step == []:
-                return [curr_id]
-            item = self.table_entry_list[curr_id]
-            for item2 in item.entry:
-                if gender(TreeNode(item2)) == "female":
-                    self.table_entry_list[curr_id].gender = [False]
-                if gender(TreeNode(item2)) == "male":
-                    self.table_entry_list[curr_id].gender = [True]
-        for item3 in ["brother", "sister"]:
-            if step[0] == item3:
-                out = []
-                for key, element in self.table_entry_list.items():
-                    if key == curr_id:
-                        continue
-                    a = self.find_human(key, ["mother"], False)
-                    b = self.find_human(curr_id, ["mother"], False)
-                    c = self.find_human(key, ["father"], False)
-                    d = self.find_human(curr_id, ["father"], False)
-                    if a != [] and b != [] and a==b and\
-                       c != [] and d != [] and c==d and\
-                       [True if item3 == "brother" else False] == element.gender:
-                        if key not in out:
-                            out.append(key)
-                            
-                if item3 == "sister":
-                    self.table_entry_list[curr_id].sister += out
-                    self.table_entry_list[curr_id].sister = list(set(self.table_entry_list[curr_id].sister))
-                    out = self.table_entry_list[curr_id].sister
-                else:
-                    self.table_entry_list[curr_id].brother += out
-                    self.table_entry_list[curr_id].brother = list(set(self.table_entry_list[curr_id].brother))
-                    out = self.table_entry_list[curr_id].brother
-                if len(out) == 0 and create_new:
-                    person = self.create()
-                    self.table_entry_list[person].gender = [True if item3 == "brother" else False]
-                    if self.table_entry_list[curr_id].father is not None:
-                        self.table_entry_list[person].father = self.table_entry_list[curr_id].father
-                    if self.table_entry_list[curr_id].mother is not None:
-                        self.table_entry_list[person].mother = self.table_entry_list[curr_id].mother
-                    if self.table_entry_list[curr_id].father is None:
-                        person_a = self.create()
-                        self.table_entry_list[person_a].gender = [True]
-                        self.table_entry_list[person].father = person_a
-                        self.table_entry_list[curr_id].father = person_a
-                    if self.table_entry_list[curr_id].mother is None:
-                        person_a = self.create()
-                        self.table_entry_list[person_a].gender = [False]
-                        self.table_entry_list[person].mother = person_a
-                        self.table_entry_list[curr_id].mother = person_a
-                    if item3 == "sister":
-                        self.table_entry_list[curr_id].sister.append(person)
-                    else:
-                        self.table_entry_list[curr_id].brother.append(person)
-                    out = [person]
-                out2 = []
-                for person_id in list(set(out)):
-                    out2 += self.find_human(person_id, step[1:], create_new)
-                return list(set(out2))
-        for item3 in ["son", "daughter"]:
-            if step[0] == item3:
-                out = []
-                for key, element in self.table_entry_list.items():
-                    if key == curr_id:
-                        continue
-                    for item2 in ["mother", "father"]:
-                        if self.find_human(key, [item2], False) == [curr_id] and [True if item3 == "son" else False] == element.gender:
-                            out.append(key)
-                if item3 == "daughter":
-                    self.table_entry_list[curr_id].daughter += out
-                    self.table_entry_list[curr_id].daughter = list(set(self.table_entry_list[curr_id].daughter))
-                    out = self.table_entry_list[curr_id].daughter
-                else:
-                    self.table_entry_list[curr_id].son += out
-                    self.table_entry_list[curr_id].son = list(set(self.table_entry_list[curr_id].son))
-                    out = self.table_entry_list[curr_id].son
-                if len(out) == 0 and create_new:
-                    person = self.create()
-                    if item.gender == [True]:
-                        self.table_entry_list[person].father = curr_id
-                    elif item.gender == [False]:
-                        self.table_entry_list[person].mother = curr_id
-                    else:
-                        self.table_entry_list[person].gender = [True if item3 == "son" else False]
-                    if item3 == "daughter":
-                        self.table_entry_list[curr_id].daughter.append(person)
-                    else:
-                        self.table_entry_list[curr_id].son.append(person)
-                    out = [person]
-                out2 = []
-                for person_id in list(set(out)):
-                    out2 += self.find_human(person_id, step[1:], create_new)
-                return list(set(out2))
-        if step[0] == "father":
-            if item.father is None and create_new:
-                item.father = self.create()
-                self.table_entry_list[item.father].gender = [True]
-            if item.father is not None:
-                return self.find_human(item.father, step[1:], create_new)
-        if step[0] == "mother":
-            if item.mother is None and create_new:
-                item.mother = self.create()
-                self.table_entry_list[item.mother].gender = [False]
-            if item.mother is not None:
-                return self.find_human(item.mother, step[1:], create_new)
-        for key, item in self.table_entry_list.items():
-            if step[0] in item.entry:
-                return self.find_human(key, step[1:], create_new)
-        if not create_new:
-            return []
-        curr_id = self.create()
-        self.table_entry_list[curr_id].entry = [step[0]]
-        return self.find_human(curr_id, step[1:], create_new)
-    def create(self):
-        out = TableEntry()
-        self.table_entry_list[self.curr] = out
-        self.curr = self.curr+1
-        return self.curr - 1
-    def find_id(self,eq):
-        root = eq
-        lst = []
-        while len(root.children) != 0:
-            lst.append(root.name)
-            root = root.children[0]
-        lst.append(root.name)
-        lst = lst[::-1]
-        out = [self.normalize_id(item) for item in self.find_human(None,lst)]
-        return list(set(out))
-    def equate_id(self, a, b):
-        if a==b:
-            return a
-        n = TableEntry()
-        p, q = self.table_entry_list[a], self.table_entry_list[b]
-        n.entry = list(set(p.entry + q.entry))
-        n.sister = list(set(p.sister + q.sister)-set([a, b]))
-        n.brother = list(set(p.brother + q.brother)-set([a, b]))
-        n.daughter = list(set(p.daughter + q.daughter))
-        n.son = list(set(p.son + q.son))
-        n.gender = list(set(p.gender) & set(q.gender))
-        n.living_state = p.living_state and q.living_state
-        n.killed = list(set(p.killed + q.killed))
-        n.emotional_state = list(set(p.emotional_state) & set(q.emotional_state))
-        if p.father is not None and q.father is not None and p.father != q.father:
-            n.father = self.equate_id(p.father, q.father)
-        elif p.father is not None:
-            n.father = p.father
-        elif q.father is not None:
-            n.father = q.father            
-        if p.mother is not None and q.mother is not None and p.mother != q.mother:
-            n.mother = self.equate_id(p.mother, q.mother)
-        elif p.mother is not None:
-            n.mother = p.mother
-        elif q.mother is not None:
-            n.mother = q.mother
-        g = self.create()
-        self.id_system.append(list(sorted([g,a,b])))
-        self.table_entry_list[g] = n
-        del self.table_entry_list[a]
-        del self.table_entry_list[b]
-        return g
-    def process_entry(self):
-        for key in self.table_entry_list.keys():
-            self.table_entry_list[key].process()
-        for key, item in self.table_entry_list.items():
-            if key in item.sister:
-                self.table_entry_list[key].sister.remove(key)
-            if key in item.brother:
-                self.table_entry_list[key].brother.remove(key)
-            for key2, item2 in self.table_entry_list.items():
-                if key == key2:
-                    continue
-                if (
-                    (item2.father is not None and key == item2.father)
-                    or
-                    (item2.mother is not None and key == item2.mother)
-                ):
-                    if item2.gender == [True]:
-                        self.table_entry_list[key].son.append(key2)
-                    elif item2.gender == [False]:
-                        self.table_entry_list[key].daughter.append(key2)
-                if key in item2.son or key in item2.daughter:
-                    if item2.gender == [True]:
-                        if self.table_entry_list[key].father is None:
-                            self.table_entry_list[key].father = key2
-                    elif item2.gender == [False]:
-                        if self.table_entry_list[key].mother is None:
-                            self.table_entry_list[key].mother = key2
-                if (
-                    item.father is not None
-                    and item2.father is not None
-                    and item.mother is not None
-                    and item2.mother is not None
-                    and item.father == item2.father
-                    and item.mother == item2.mother
-                ):
-                    if item2.gender == [True]:
-                        self.table_entry_list[key].brother.append(key2)
-                    elif item2.gender == [False]:
-                        self.table_entry_list[key].sister.append(key2)
-        for key, item in self.table_entry_list.items():
-            self.table_entry_list[key].brother = list(set(self.normalize_id(x) for x in item.brother))
-            self.table_entry_list[key].sister = list(set(self.normalize_id(x) for x in item.sister))
-            self.table_entry_list[key].daughter = list(set(self.normalize_id(x) for x in item.daughter))
-            self.table_entry_list[key].son = list(set(self.normalize_id(x) for x in item.son))
-    def equate_eq(self, a, b):
-        if not valid_actor_eq(a) or not valid_actor_eq(b):
-            return None
-        p = self.find_id(a)
-        q = self.find_id(b)
-        if set(p) == set(q):
-            return 0
-        out = id_helper(p, q)
-        if out is None:
-            return None
-        self.process_entry()
-        out = self.equate_id(*out)
-        self.adjust_id()
-        return out
-    def normalize_id(self, number):
-        new_cat = []
-        for item in self.id_system:
-            done = True
-            for i in range(len(new_cat)):
-                if len(set(new_cat[i]) & set(item)) != 0:
-                    new_cat[i] += item
-                    new_cat[i] = list(set(new_cat[i]))
-                    done = False
-                    break
-            if done:
-                new_cat.append(item)
-        self.id_system = new_cat
-        for item in self.id_system:
-            if number in item:
-                return item[0]
-        return number
-    def equate_bool_eq(self, eq):
-        if len(eq.children) != 1 or not valid_actor_eq(eq.children[0]):
-            return None
-        out = self.find_id(eq.children[0])
-        if out is None:
-            return None
-        for number in out:
-            if number is None:
-                return None
-            if eq.name == "live":
-                if not self.table_entry_list[number].living_state:
-                    return None
-            if eq.name == "die":
-                self.table_entry_list[number].living_state = False
-            if eq.name in ["girl", "boy"]:
-                if gender(eq.children[0]) != "unknown":
-                    return number
-            if eq.name == "girl":
-                if set(self.table_entry_list[number].gender) == set([True, False]) or self.table_entry_list[number].gender == [False]:
-                    self.table_entry_list[number].gender = [False]
-                else:
-                    return None
-            if eq.name == "boy":
-                if set(self.table_entry_list[number].gender) == set([True, False]) or self.table_entry_list[number].gender == [True]:
-                    self.table_entry_list[number].gender = [True]
-                else:
-                    return None
-        return out
-    def lambda_compute(self, eq):
-        if eq.name == "lambda":
-            output = []
-            for key, item in self.table_entry_list.items():
-                c = replace(eq.children[1], eq.children[0], TreeNode(str(key)).fx("id"))
-                s = replace(eq.children[2], eq.children[0], TreeNode(str(key)).fx("id"))
-                u = replace(eq.children[3], eq.children[0], TreeNode(str(key)).fx("id"))
-                out = self.bool_eq(c)
-                if out is True:
-                    output.append(s)
-                elif out is False:
-                    output.append(u)
-                    
-            for i in range(len(output)-1,-1,-1):
-                if output[i] == TreeNode("DELETE") or contain2(output[i], TreeNode("DELETE")):
-                    output.pop(i)
-            output2 = []
-            for item in output:
-                output2 += self.rm_eq_id(item)
-            output = list(set(output2))
-            
-            if len(output) == 1:
-                return output[0]
-            return output
-        return []
-    def bool_eq(self, eq):
-        number_lst = []
-        number = None
-        if eq.name == "equal":
-            for item in eq.children:
-                if item.name == "id":
-                    number_lst.append([int(item.children[0].name)])
-                elif valid_actor_eq(item):
-                    tmp = self.find_id(item)
-                    if tmp is None:
-                        return None
-                    number_lst.append(tmp)
-                else:
-                    return None
-            
-            if number_lst is None:
-                return None
-            if number_lst[0][0] in number_lst[1]:
-                return True
-            else:
-                return False
-        elif len(eq.children) == 1:
-            item = eq.children[0]
-            if item.name == "id":
-                number = [int(item.children[0])]
-            elif valid_actor_eq(item):
-                number = self.find_id(item)
-                if number is None:
-                    return None
-            else:
-                return None
-        elif len(eq.children) == 2 and eq.name == "kill":
-            number_lst = []
-            for item in eq.children:
-                if item.name == "id":
-                    number_lst.append([int(item.children[0].name)])
-                elif valid_actor_eq(item):
-                    tmp = self.find_id(item)
-                    if tmp is None:
-                        return None
-                    number_lst.append(tmp)
-                else:
-                    return None
-            if self.table_entry_list[number_lst[0][0]].killed == []:
-                return False
-            if set(number_lst[1]) <= set(self.table_entry_list[number_lst[0][0]].killed):
-                return True
-            return False
-        else:
-            return None
-        lst = number
-        lst2= []
-        for number in lst:
-            if eq.name == "live":
-                lst2.append(self.table_entry_list[number].living_state)
-            if eq.name == "die":
-                lst2.append(not self.table_entry_list[number].living_state)
-            if eq.name == "girl":
-                if len(self.table_entry_list[number].gender) == 1:
-                    lst2.append(not self.table_entry_list[number].gender[0])
-            if eq.name == "boy":
-                if len(self.table_entry_list[number].gender) == 1:
-                    lst2.append(self.table_entry_list[number].gender[0])
-        if len(set(lst2)) != 1:
-            return None
-        return lst2[0]
-    def equate_verb(self, eq):
-        if eq.name in ["kill"] and len(eq.children) == 2:
-            index = self.find_id(eq.children[0])
-            index2 = self.find_id(eq.children[1])
-            if len(index) != 1 or len(index2) == 0:
-                return None
-            self.table_entry_list[index[0]].killed += index2
-            return index
-        return None
-    def equate(self, eq):
-        orig = copy.deepcopy(self)
-        a = self.equate_bool_eq(eq)
-        b = None
-        c = None
-        d = None
-        if eq.name == "equal":
-            b = self.equate_eq(*eq.children)
-            if b is None:
-                self = orig
-                return None
-            else:
-                for key in self.table_entry_list.keys():
-                    if len(self.table_entry_list[key].gender) == 0:
-                        self = orig
-                        return None
-                return b
-        if eq.name == "kill":
-            c = self.equate_verb(eq)
-            d = self.equate_bool_eq(eq.children[1].fx("die"))
-            if c is None or d is None:
-                self = orig
-                return None
-            else:
-                return c
-        if a is not None:
-            return a
-        self = orig
-        return None
-    def alias_gen(self):
-        for key, item in self.table_entry_list.items():
-            item.alias = list(item.entry)
 
-        relations = [
-            "mother",
-            "father",
-            "son",
-            "daughter",
-            "sister",
-            "brother"
-        ]
-        for _ in range(2):
-            snapshot = {
-                k: list(v.alias)
-                for k, v in self.table_entry_list.items()
-            }
-            for key, aliases in snapshot.items():
-                if not aliases:
-                    continue
-                # shortest alias
-                base = min(
-                    aliases,
-                    key=lambda x: len(str_form(x))
-                )
-                # FIX:
-                # avoid TreeNode(TreeNode(...))
-                base_node = (
-                    base
-                    if isinstance(base, TreeNode)
-                    else TreeNode(base)
-                )
-                for relation in relations:
-                    targets = self.find_human(
-                        key,
-                        [relation],
-                        False
-                    )
-                    if len(targets) != 1:
-                        continue
-                    # normalize single value -> list
-                    if not isinstance(targets, list):
-                        targets = [targets]
-                    new_alias = base_node.fx(relation)
-                    for target in targets:
-                        if target not in self.table_entry_list:
-                            continue
-                        if (
-                            new_alias
-                            not in self.table_entry_list[target].alias
-                        ):
-                            self.table_entry_list[target].alias.append(
-                                new_alias
-                            )
-    def find_from_id(self, number):
-        out = [item if isinstance(item, TreeNode) else TreeNode(item) for item in self.table_entry_list[number].alias]
-        return list(set(out))
-    def rm_eq_id(self, eq):
-        #orig = copy.deepcopy(self)
-        self.alias_gen()
-        id_nodes = collect_id_nodes(eq)
-        if not id_nodes:
-            return [eq]
-        replacement_choices = []
-        for node in id_nodes:
-            number = int(node.children[0].name)
-            aliases = self.find_from_id(number)
-            if aliases == []:
-                aliases = [node]
-            replacement_choices.append(aliases)
-        outputs = []
-        for combo in itertools.product(*replacement_choices):
-            new_eq = eq
-            for old_node, new_node in zip(
-                id_nodes,
-                combo
-            ):
-                new_eq = replace(
-                    new_eq,
-                    old_node,
-                    new_node
-                )
-            outputs.append(new_eq)
-        #self = orig
-        return outputs
-    def adjust_id(self):
-        for item in self.id_system:
-            for item2 in item[1:]:
-                if item2 in self.table_entry_list.keys():
-                    self.table_entry_list[item[0]] = self.table_entry_list[item2]
-                    self.table_entry_list.pop(item2, None)
-                for key, item3 in self.table_entry_list.items():
-                    if item3.father == item2:
-                        self.table_entry_list[key].father = item[0]
-                    if item3.mother == item2:
-                        self.table_entry_list[key].mother = item[0]
-    def __repr__(self):
-        s = None
-        if self.id_system == []:
-            s = []
-        else:
-            s = [str(self.id_system)]
-        for key, item in self.table_entry_list.items():
-            s.append(f"id {key}")
-            s.append(str(item))
-            s.append("")
-        return "\n".join(s)
+
+def _as_node(x):
+    """Entries are names (str); aliases are trees. Never wrap a TreeNode twice."""
+    return x if isinstance(x, TreeNode) else TreeNode(x)
+
+
+def _unique(items):
+    """Order-preserving de-duplication that only needs ==, not hashing."""
+    out = []
+    for item in items:
+        if item not in out:
+            out.append(item)
+    return out
+
+
 class TableEntry:
     def __init__(
         self,
@@ -546,34 +60,39 @@ class TableEntry:
         son=None,
         crush=None,
         killed=None,
-        gender=[True, False],
-        emotional_state=[True, False],
-        living_state=True
+        gender=None,
+        emotional_state=None,
+        living_state=True,
     ):
-        self.entry = entry if entry else []
-        self.gender = gender
-        self.emotional_state = emotional_state
+        # copies everywhere: the old mutable defaults ([True, False]) and
+        # `self.alias = entry` shared one list between entries
+        self.entry = list(entry) if entry else []
+        self.gender = list(gender) if gender is not None else [True, False]
+        self.emotional_state = (
+            list(emotional_state) if emotional_state is not None else [True, False]
+        )
         self.living_state = living_state
         self.father = father
         self.mother = mother
-        self.killed = killed if killed else []
-        self.alias = entry if entry else []
-        self.crush = crush if crush else []
-        self.sister = sister if sister else []
-        self.brother = brother if brother else []
-        self.daughter = daughter if daughter else []
-        self.son = son if son else []
+        self.killed = list(killed) if killed else []
+        self.alias = list(self.entry)
+        self.crush = list(crush) if crush else []
+        self.sister = list(sister) if sister else []
+        self.brother = list(brother) if brother else []
+        self.daughter = list(daughter) if daughter else []
+        self.son = list(son) if son else []
         self.process()
+
     def process(self):
+        """Narrow gender using the names this entity goes by."""
         for item in self.entry:
-            if isinstance(item, str):
-                item = TreeNode(item)
-            out = gender(item)
+            out = gender(_as_node(item))
             if out == "male":
-                self.gender = [True]
+                self.gender = [g for g in self.gender if g is True]
             elif out == "female":
-                self.gender = [False]
+                self.gender = [g for g in self.gender if g is False]
         return self
+
     def __repr__(self):
         line = "+" + "-" * 60 + "+"
         s = line + "\n"
@@ -595,6 +114,521 @@ class TableEntry:
                 s += f"|   {eq}\n"
         s += line
         return s
+
     def __eq__(self, other):
-        lst = [(set(item.gender),set(item.emotional_state),set(item.living_state),set(item.entry)) for item in [self, other]]
-        return lst[0] == lst[1]
+        if not isinstance(other, TableEntry):
+            return NotImplemented
+        return (
+            set(self.gender) == set(other.gender)
+            and set(self.emotional_state) == set(other.emotional_state)
+            and self.living_state == other.living_state
+            and all(e in other.entry for e in self.entry)
+            and all(e in self.entry for e in other.entry)
+        )
+
+    __hash__ = None
+
+
+class Table:
+    MAX_ALIAS_COMBOS = 1000
+
+    def __init__(self):
+        self.table_entry_list = {}
+        self.merged = {}              # merged-away id -> surviving id
+        self.curr = 0
+        self.create_new_nodes = True
+
+    # ------------------------------------------------------------------
+    # state: ids, snapshots
+    # ------------------------------------------------------------------
+    @property
+    def id_system(self):
+        """Merge groups, smallest id (the survivor) first. Kept for display."""
+        groups = {}
+        for old in self.merged:
+            groups.setdefault(self.normalize_id(old), []).append(old)
+        return [sorted([root] + olds) for root, olds in sorted(groups.items())]
+
+    def normalize_id(self, number):
+        while number in self.merged:
+            number = self.merged[number]
+        return number
+
+    def _normalized(self, ids):
+        return sorted({self.normalize_id(i) for i in ids})
+
+    def _snapshot(self):
+        return copy.deepcopy((self.table_entry_list, self.merged, self.curr))
+
+    def _restore(self, snap):
+        self.table_entry_list, self.merged, self.curr = snap
+
+    def _atomic(self, fn):
+        """Run fn; if it fails (None / contradiction) the table is rolled back."""
+        snap = self._snapshot()
+        try:
+            out = fn()
+        except Contradiction:
+            out = None
+        if out is None:
+            self._restore(snap)
+        return out
+
+    def _check(self):
+        """Raise Contradiction if any entity has become impossible."""
+        for ent in self.table_entry_list.values():
+            ent.process()
+            if not ent.gender or not ent.emotional_state:
+                raise Contradiction("no possible gender / feeling left")
+
+    def create(self, entry=None):
+        ident = self.curr
+        self.table_entry_list[ident] = TableEntry(entry=entry)
+        self.curr += 1
+        return ident
+
+    # ------------------------------------------------------------------
+    # path resolution: "john's mother's sister"  ->  ids
+    # ------------------------------------------------------------------
+    def _lookup_name(self, name, create):
+        for key, ent in self.table_entry_list.items():
+            if name in ent.entry:
+                return key
+        if not create:
+            return None
+        return self.create([name])
+
+    def _parent_id(self, key, relation):
+        ident = getattr(self.table_entry_list[key], relation)
+        return None if ident is None else self.normalize_id(ident)
+
+    def _parent(self, curr, relation, create):
+        ent = self.table_entry_list[curr]
+        ident = self._parent_id(curr, relation)
+        if ident is None and create:
+            ident = self.create()
+            self.table_entry_list[ident].gender = [relation == "father"]
+            setattr(ent, relation, ident)
+        return [] if ident is None else [ident]
+
+    def _siblings(self, curr, relation, create):
+        ent = self.table_entry_list[curr]
+        male = relation == "brother"
+        mine = (self._parent_id(curr, "father"), self._parent_id(curr, "mother"))
+        found = set(self._normalized(getattr(ent, relation)))
+        if None not in mine:
+            for key, other in self.table_entry_list.items():
+                if (
+                    key != curr
+                    and other.gender == [male]
+                    and (
+                        self._parent_id(key, "father"),
+                        self._parent_id(key, "mother"),
+                    ) == mine
+                ):
+                    found.add(key)
+        found.discard(curr)
+        setattr(ent, relation, sorted(found))
+        if not found and create:
+            found = {self._phantom_sibling(curr, male)}
+        return sorted(found)
+
+    def _phantom_sibling(self, curr, male):
+        """Someone has to be 'my sister': invent her, with the same parents."""
+        ent = self.table_entry_list[curr]
+        person = self.create()
+        self.table_entry_list[person].gender = [male]
+        for relation, parent_is_male in (("father", True), ("mother", False)):
+            parent = self._parent_id(curr, relation)
+            if parent is None:
+                parent = self.create()
+                self.table_entry_list[parent].gender = [parent_is_male]
+                setattr(ent, relation, parent)
+            setattr(self.table_entry_list[person], relation, parent)
+        getattr(ent, "brother" if male else "sister").append(person)
+        return person
+
+    def _children(self, curr, relation, create):
+        ent = self.table_entry_list[curr]
+        male = relation == "son"
+        found = set(self._normalized(getattr(ent, relation)))
+        for key, other in self.table_entry_list.items():
+            if (
+                key != curr
+                and other.gender == [male]
+                and curr in (
+                    self._parent_id(key, "father"),
+                    self._parent_id(key, "mother"),
+                )
+            ):
+                found.add(key)
+        found.discard(curr)
+        setattr(ent, relation, sorted(found))
+        if not found and create:
+            person = self.create()
+            child = self.table_entry_list[person]
+            child.gender = [male]          # the old code forgot this when the parent's gender was known
+            if ent.gender == [True]:
+                child.father = curr
+            elif ent.gender == [False]:
+                child.mother = curr
+            getattr(ent, relation).append(person)
+            found = {person}
+        return sorted(found)
+
+    def find_human(self, curr_id=None, step=None, create_new=True):
+        """
+        Follow a path of relations from an entity (or from a name when
+        curr_id is None: step[0] is then the name). Returns a list of ids.
+        create_new=False never adds anything to the table.
+        """
+        step = list(step) if step else []
+        create_new = create_new and self.create_new_nodes
+        if curr_id is None:
+            if not step:
+                return []
+            curr_id = self._lookup_name(step[0], create_new)
+            if curr_id is None:
+                return []
+            step = step[1:]
+        curr_id = self.normalize_id(curr_id)
+        if curr_id not in self.table_entry_list:
+            return []
+        if not step:
+            return [curr_id]
+
+        self.table_entry_list[curr_id].process()
+        relation, rest = step[0], step[1:]
+        if relation in ("father", "mother"):
+            found = self._parent(curr_id, relation, create_new)
+        elif relation in ("brother", "sister"):
+            found = self._siblings(curr_id, relation, create_new)
+        elif relation in ("son", "daughter"):
+            found = self._children(curr_id, relation, create_new)
+        else:
+            return []                       # not a relation we can follow
+        out = []
+        for ident in found:
+            out += self.find_human(ident, rest, create_new)
+        return _unique(out)
+
+    def find_id(self, eq, create=True):
+        """Ids an actor expression refers to; create=False is a pure lookup."""
+        root = eq
+        names = []
+        while len(root.children) != 0:
+            names.append(root.name)
+            root = root.children[0]
+        names.append(root.name)
+        names.reverse()
+        ids = self.find_human(None, names, create)
+        return _unique(self.normalize_id(i) for i in ids)
+
+    def _ids(self, item):
+        """Non-creating lookup for queries; None if nothing is known."""
+        if item.name == "id":
+            return [self.normalize_id(int(item.children[0].name))]
+        if not valid_actor_eq(item):
+            return None
+        return self.find_id(item, create=False) or None
+
+    # ------------------------------------------------------------------
+    # merging
+    # ------------------------------------------------------------------
+    def equate_id(self, a, b):
+        """Merge two entities in place (smaller id survives). Raises Contradiction."""
+        a, b = self.normalize_id(a), self.normalize_id(b)
+        if a == b:
+            return a
+        keep, drop = min(a, b), max(a, b)
+        p = self.table_entry_list[keep]
+        q = self.table_entry_list.pop(drop)
+        self.merged[drop] = keep
+
+        if p.living_state != q.living_state:
+            raise Contradiction("one is dead, the other alive")
+        p.entry = _unique(p.entry + q.entry)
+        p.alias = _unique(p.alias + q.alias)
+        p.crush = _unique(p.crush + q.crush)
+        p.gender = [g for g in p.gender if g in q.gender]
+        p.emotional_state = [g for g in p.emotional_state if g in q.emotional_state]
+        p.killed = self._normalized(p.killed + q.killed)
+        for relation in ("sister", "brother", "daughter", "son"):
+            merged = set(
+                self.normalize_id(i)
+                for i in getattr(p, relation) + getattr(q, relation)
+            ) - {keep, drop}
+            setattr(p, relation, sorted(merged))
+        p.process()
+        if not p.gender or not p.emotional_state:
+            raise Contradiction("no possible gender / feeling left")
+
+        for relation in ("father", "mother"):
+            mine, theirs = getattr(p, relation), getattr(q, relation)
+            if mine is None:
+                setattr(p, relation, theirs)
+            elif theirs is not None:
+                self.equate_id(mine, theirs)      # same person -> same parents
+        return self.normalize_id(keep)
+
+    def adjust_id(self):
+        """Kept for compatibility: merging is now done in place, nothing to fix."""
+        return None
+
+    def process_entry(self):
+        """Derive what follows from parents / children / siblings."""
+        ids = list(self.table_entry_list.keys())
+        for ent in self.table_entry_list.values():
+            ent.process()
+        for key in ids:
+            ent = self.table_entry_list[key]
+            for key2 in ids:
+                if key == key2:
+                    continue
+                other = self.table_entry_list[key2]
+                # key is a parent of key2
+                if key in (
+                    self._parent_id(key2, "father"),
+                    self._parent_id(key2, "mother"),
+                ):
+                    if other.gender == [True]:
+                        ent.son.append(key2)
+                    elif other.gender == [False]:
+                        ent.daughter.append(key2)
+                # key2 lists key as its child, so key2 is a parent of key
+                if key in self._normalized(other.son) or key in self._normalized(other.daughter):
+                    if other.gender == [True] and ent.father is None:
+                        ent.father = key2
+                    elif other.gender == [False] and ent.mother is None:
+                        ent.mother = key2
+                # same two parents: siblings
+                mine = (self._parent_id(key, "father"), self._parent_id(key, "mother"))
+                theirs = (self._parent_id(key2, "father"), self._parent_id(key2, "mother"))
+                if None not in mine and mine == theirs:
+                    if other.gender == [True]:
+                        ent.brother.append(key2)
+                    elif other.gender == [False]:
+                        ent.sister.append(key2)
+        for key in ids:
+            ent = self.table_entry_list[key]
+            for relation in ("brother", "sister", "daughter", "son"):
+                setattr(
+                    ent, relation,
+                    [i for i in self._normalized(getattr(ent, relation)) if i != key],
+                )
+
+    def equate_eq(self, a, b):
+        """Declare two actor expressions to be the same person."""
+        if not valid_actor_eq(a) or not valid_actor_eq(b):
+            return None
+
+        def run():
+            p = self.find_id(a)
+            q = self.find_id(b)
+            if not p or not q:
+                return None
+            if set(p) == set(q):
+                return 0
+            pair = id_helper(p, q)
+            if pair is None:
+                return None
+            self.process_entry()
+            merged = self.equate_id(*pair)
+            self._check()
+            return merged
+
+        return self._atomic(run)
+
+    # ------------------------------------------------------------------
+    # statements
+    # ------------------------------------------------------------------
+    def equate_bool_eq(self, eq):
+        """Record a one-place fact: live / die / girl / boy / happy / sad."""
+        if len(eq.children) != 1 or not valid_actor_eq(eq.children[0]):
+            return None
+
+        def run():
+            ids = self.find_id(eq.children[0])
+            if not ids:
+                return None
+            for number in ids:
+                ent = self.table_entry_list[number]
+                if eq.name == "live":
+                    if not ent.living_state:
+                        return None
+                elif eq.name == "die":
+                    ent.living_state = False
+                elif eq.name in ("girl", "boy"):
+                    wanted = eq.name == "boy"
+                    if wanted not in ent.gender:     # also catches "mary is a boy"
+                        return None
+                    ent.gender = [wanted]
+                elif eq.name in ("happy", "sad"):
+                    wanted = eq.name == "happy"
+                    if wanted not in ent.emotional_state:
+                        return None
+                    ent.emotional_state = [wanted]
+                else:
+                    return None                      # unknown predicate: not recorded
+            self._check()
+            return ids
+
+        return self._atomic(run)
+
+    def equate_verb(self, eq):
+        if eq.name in ["kill"] and len(eq.children) == 2:
+            def run():
+                index = self.find_id(eq.children[0])
+                index2 = self.find_id(eq.children[1])
+                if len(index) != 1 or len(index2) == 0:
+                    return None
+                killer = self.table_entry_list[index[0]]
+                killer.killed = self._normalized(killer.killed + index2)
+                return index
+
+            return self._atomic(run)
+        return None
+
+    def equate(self, eq):
+        """Tell the table a fact. Returns None (and changes nothing) if it fails."""
+        def run():
+            if eq.name == "equal" and len(eq.children) == 2:
+                return self.equate_eq(*eq.children)
+            if eq.name == "kill" and len(eq.children) == 2:
+                c = self.equate_verb(eq)
+                if c is None:
+                    return None
+                d = self.equate_bool_eq(eq.children[1].fx("die"))
+                if d is None:
+                    return None
+                return c
+            return self.equate_bool_eq(eq)
+
+        return self._atomic(run)
+
+    # ------------------------------------------------------------------
+    # queries (never change the table)
+    # ------------------------------------------------------------------
+    def bool_eq(self, eq):
+        """True / False / None (unknown)."""
+        if eq.name == "equal" and len(eq.children) == 2:
+            sets = [self._ids(c) for c in eq.children]
+            if any(s is None for s in sets):
+                return None
+            a, b = set(sets[0]), set(sets[1])
+            if a & b:
+                return True if len(a) == 1 or len(b) == 1 else None
+            return False
+
+        if len(eq.children) == 1:
+            ids = self._ids(eq.children[0])
+            if ids is None:
+                return None
+            values = []
+            for number in ids:
+                ent = self.table_entry_list[number]
+                if eq.name == "live":
+                    values.append(ent.living_state)
+                elif eq.name == "die":
+                    values.append(not ent.living_state)
+                elif eq.name == "girl" and len(ent.gender) == 1:
+                    values.append(ent.gender[0] is False)
+                elif eq.name == "boy" and len(ent.gender) == 1:
+                    values.append(ent.gender[0] is True)
+                elif eq.name in ("happy", "sad") and len(ent.emotional_state) == 1:
+                    values.append(ent.emotional_state[0] is (eq.name == "happy"))
+            return values[0] if len(set(values)) == 1 else None
+
+        if len(eq.children) == 2 and eq.name == "kill":
+            killers, victims = (self._ids(c) for c in eq.children)
+            if killers is None or victims is None:
+                return None
+            killed = set(self._normalized(self.table_entry_list[killers[0]].killed))
+            return bool(killed) and set(victims) <= killed
+        return None
+
+    def lambda_compute(self, eq):
+        """lambda(var, condition, if_true, if_false): every entity answers once."""
+        if eq.name != "lambda":
+            return []
+        var, condition, if_true, if_false = eq.children[:4]
+        output = []
+        for key in list(self.table_entry_list.keys()):   # queries must not resize the dict they iterate
+            marker = TreeNode(str(key)).fx("id")
+            out = self.bool_eq(replace(condition, var, marker))
+            if out is True:
+                output.append(replace(if_true, var, marker))
+            elif out is False:
+                output.append(replace(if_false, var, marker))
+
+        output = [
+            item for item in output
+            if item != TreeNode("DELETE") and not contain2(item, TreeNode("DELETE"))
+        ]
+        self.alias_gen()                                  # once, not once per answer
+        expanded = []
+        for item in output:
+            expanded += self.rm_eq_id(item, refresh=False)
+        output = _unique(expanded)
+        return output[0] if len(output) == 1 else output
+
+    # ------------------------------------------------------------------
+    # names for ids
+    # ------------------------------------------------------------------
+    def alias_gen(self):
+        """Give every entity names like "my mother", built from its relatives."""
+        relations = ["mother", "father", "son", "daughter", "sister", "brother"]
+        for ent in self.table_entry_list.values():
+            ent.alias = _unique(_as_node(e) for e in ent.entry)
+        for _ in range(2):
+            snapshot = {k: list(v.alias) for k, v in self.table_entry_list.items()}
+            for key, aliases in snapshot.items():
+                if not aliases:
+                    continue
+                base = min(aliases, key=lambda node: len(str_form(node)))
+                for relation in relations:
+                    targets = self.find_human(key, [relation], False)
+                    if len(targets) != 1:
+                        continue
+                    target = targets[0]
+                    new_alias = base.fx(relation)
+                    if (
+                        target in self.table_entry_list
+                        and new_alias not in self.table_entry_list[target].alias
+                    ):
+                        self.table_entry_list[target].alias.append(new_alias)
+
+    def find_from_id(self, number):
+        number = self.normalize_id(number)
+        if number not in self.table_entry_list:
+            return []
+        return _unique(_as_node(a) for a in self.table_entry_list[number].alias)
+
+    def rm_eq_id(self, eq, refresh=True):
+        """Replace id(n) nodes by names / descriptions of entity n."""
+        if refresh:
+            self.alias_gen()
+        id_nodes = collect_id_nodes(eq)
+        if not id_nodes:
+            return [eq]
+        choices = []
+        for node in id_nodes:
+            aliases = self.find_from_id(int(node.children[0].name))
+            choices.append(aliases or [node])
+        outputs = []
+        for combo in itertools.islice(
+            itertools.product(*choices), self.MAX_ALIAS_COMBOS
+        ):
+            new_eq = eq
+            for old_node, new_node in zip(id_nodes, combo):
+                new_eq = replace(new_eq, old_node, new_node)
+            outputs.append(new_eq)
+        return outputs
+
+    def __repr__(self):
+        s = [str(self.id_system)] if self.merged else []
+        for key, item in self.table_entry_list.items():
+            s.append(f"id {key}")
+            s.append(str(item))
+            s.append("")
+        return "\n".join(s)
