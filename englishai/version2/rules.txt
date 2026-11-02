@@ -14,8 +14,6 @@ ATTITUDE think
 ATTITUDE want
 # whoever knows P also thinks P
 ENTAILS know think
-CLOSED think
-CLOSED want
 
 DISTINCT i you mary john alice bob
 

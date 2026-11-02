@@ -8,10 +8,12 @@ from .code import *
 CREATE_NONE = 0   # lookup only (rule conditions)
 CREATE_LINK = 1   # may create function values, e.g. i's sister (rule ASSERTs)
 CREATE_ALL = 2    # may also create new named entities (statements, questions)
+CREATE_PHANTOM = 3  # statements only: "my sister's father" invents a sister if none is known
 
 VARS = ("x", "y", "z", "w")   # rule variables; each ranges over entities
-KNOWER = "k"                  # internal variable of the lifted CLOSED rules
-ALL_VARS = VARS + (KNOWER,)
+# internal variables of the lifted CLOSED rules: k1 knows that k2 knows that ...
+KNOWERS = tuple(f"k{i}" for i in range(1, 9))
+ALL_VARS = VARS + KNOWERS
 
 NE = "!="         # rel key: ids an entity is known to differ from (hard fact)
 SOFT = "~="       # rel key: ids assumed different because of their names (default)
@@ -46,8 +48,9 @@ class Condition:
 #   FACTIVE name       attitude whose content is true: x knows that P  =>  P
 #   ATTITUDE name      attitude that only records what x holds (no truth)
 #   ENTAILS a b        x a-s that P  =>  x b-s that P   (know => think)
-#   CLOSED name        x names that P, and the rules derive Q from P  =>  x names that Q
-#                      (every IF/ASSERT rule is re-run inside what x knows)
+#   CLOSED name        x names that P, and the rules derive Q from P  =>  x names that Q.
+#                      Every IF/ASSERT rule is re-run inside what x knows, and inside
+#                      what x knows that y knows, ... (up to Table.MAX_DEPTH levels)
 #   lines starting with # are comments
 #   DISTINCT a b c     different names, different people, unless a statement
 #                      says otherwise ("i am bob" is accepted, rules cannot
@@ -212,18 +215,22 @@ class TableEntry:
         s += line
         return s
 
+
 class Table:
     MAX_ROUNDS = 100
+    MAX_DEPTH = 3          # how deeply nested attitudes the rules are re-run in
 
     def __init__(self, rules=RULES):
         self.table_entry_list = {}
         self.alias = {}        # merged-away id -> surviving id
         self.curr = 0
+        self._version = 0      # bumped whenever entities are created / merged / restored
+        self._key_cache = {}   # id(stored proposition) -> (version, canonical key)
         self.rule = parse(rules)
         self.functions = self._declared("FUNCTION")
         self.relations = self._declared("RELATION")
         self.factive = self._declared("FACTIVE")
-        self.entails = {}                     # attitude -> weaker attitudes it implies
+        self.entails = {}                  # attitude -> weaker attitudes it implies
         for r in self.rule:
             if isinstance(r, tuple) and r[0] == "ENTAILS" and r[1]:
                 strong, *weak = r[1].split()
@@ -245,21 +252,17 @@ class Table:
             (r, self._rule_vars(r)) for r in self.rule
             if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED"))
         ]
-        # Multi-depth lifted epistemic rules (depth 1 for direct knowers, depth 2 for nested knowers)
+        # the same rules, re-run inside what a knower knows, and inside what
+        # a knower knows that another knows, ... (chains of CLOSED attitudes)
         self.lifted_rules = []
-        for att in sorted(self.closed):
-            for r, _ in self.inference_rules:
-                if isinstance(r, Condition) and not self._cond_mentions_attitude(r):
-                    # Depth 1: k1 knows P
-                    l1 = self._lift_rule_to_knowers(r, att, ["k1"])
-                    self.lifted_rules.append(
-                        (l1, self._rule_vars(l1), att)
-                    )
-                    # Depth 2: k2 knows (k1 knows P)
-                    l2 = self._lift_rule_to_knowers(r, att, ["k1", "k2"])
-                    self.lifted_rules.append(
-                        (l2, self._rule_vars(l2), att)
-                    )
+        for depth in range(1, min(self.MAX_DEPTH, len(KNOWERS)) + 1):
+            for chain in itertools.product(sorted(self.closed), repeat=depth):
+                for r, _ in self.inference_rules:
+                    if isinstance(r, Condition):
+                        lifted = self._lift_condition(r, chain)
+                        self.lifted_rules.append(
+                            (lifted, self._rule_vars(lifted), chain)
+                        )
 
     def _declared(self, head):
         return {
@@ -271,7 +274,7 @@ class Table:
     def _apply_distinct(self):
         """DISTINCT groups: entities with different names are assumed different."""
         for group in self.distinct_groups:
-            owners = {}                        # name -> {entity ids}
+            owners = {}                       # name -> {entity ids}
             for key, ent in self.table_entry_list.items():
                 for e in ent.entry:
                     if not e.children and e.name in group:
@@ -287,6 +290,11 @@ class Table:
                             ).add(v)
 
     def _incompatible(self, p, q, seen=None):
+        """
+        True if merging p and q would certainly contradict: they carry opposite
+        unary facts (girl vs boy, dead vs alive, ...), are known to differ, or
+        their mothers/fathers/... are incompatible in turn.
+        """
         p, q = self._find(p), self._find(q)
         if p == q:
             return False
@@ -307,6 +315,11 @@ class Table:
         return False
 
     def _prop_key(self, eq, create=CREATE_NONE):
+        """
+        Canonical form of a proposition, with every entity replaced by its
+        current id, so that "john killed mary" is recognised however john and
+        mary were named, and survives merges.
+        """
         is_term = (not eq.children) or (
             eq.name in self.functions and len(eq.children) == 1
         )
@@ -321,6 +334,7 @@ class Table:
         return (eq.name, tuple(keys))
 
     def _entailed(self, name):
+        """Every attitude implied by `name` (know => think => ...)."""
         out, todo = set(), [name]
         while todo:
             for weaker in self.entails.get(todo.pop(), ()):
@@ -329,20 +343,33 @@ class Table:
                     todo.append(weaker)
         return out
 
+    def _stored_key(self, t):
+        """Canonical key of a stored proposition, cached until the table changes."""
+        hit = self._key_cache.get(id(t))
+        if hit is not None and hit[0] == self._version:
+            return hit[1]
+        key = self._prop_key(t)
+        self._key_cache[id(t)] = (self._version, key)
+        return key
+
     def _knows(self, ent, name, prop_key):
+        head = prop_key[0] if prop_key[0] not in ("e", "?") else None
         return any(
-            self._prop_key(t) == prop_key for t in ent.know.get(name, [])
+            (head is None or t.name == head) and self._stored_key(t) == prop_key
+            for t in ent.know.get(name, [])
         )
 
     def _expr_vars(self, node):
+        """Rule variables (x, y, z, w) occurring in an expression."""
         out = set()
-        if not node.children and (node.name in ALL_VARS or node.name.startswith("k")):
+        if not node.children and node.name in ALL_VARS:
             out.add(node.name)
         for c in node.children:
             out |= self._expr_vars(c)
         return out
 
     def _rule_vars(self, rule):
+        """Variables a rule uses, in VARS order."""
         found = set()
 
         def walk(r):
@@ -362,30 +389,84 @@ class Table:
                         found.update(self._expr_vars(part))
 
         walk(rule)
-        return [v for v in sorted(found) if v in ALL_VARS or v.startswith("k")]
+        return [v for v in ALL_VARS if v in found]
 
-    def _mentions_attitude(self, expr):
-        return expr.name in self.attitudes or any(
-            self._mentions_attitude(c) for c in expr.children
+    def _wrap(self, chain, p):
+        """p  ->  a1(k1, a2(k2, ... p))  for the attitudes in chain."""
+        for i in reversed(range(len(chain))):
+            p = TreeNode(chain[i], [TreeNode(KNOWERS[i]), p])
+        return p
+
+    def _lift_items(self, items, chain):
+        out = []
+        for item in items:
+            if isinstance(item, Condition):
+                out.append(self._lift_condition(item, chain))
+            elif isinstance(item, tuple) and item[0] == "ASSERT":
+                out.append(("ASSERT", self._wrap(chain, item[1])))
+        return out
+
+    def _lift_condition(self, cond, chain):
+        """
+        IF E / TRUE a / FALSE b / UNKNOWN c   becomes, inside the attitudes
+        in chain: IF k knows E: TRUE a;  otherwise IF k knows not E: FALSE b,
+        else c;  every ASSERT P becomes ASSERT k knows P.
+        Rules about attitudes are lifted too, so the rules apply at every
+        level of nesting.
+        """
+        e = cond.expr
+        neg = (
+            e.children[0]
+            if e.name == "not" and len(e.children) == 1
+            else TreeNode("not", [e])
+        )
+        return Condition(
+            self._wrap(chain, e),
+            self._lift_items(cond.true, chain),
+            [],
+            [
+                Condition(
+                    self._wrap(chain, neg),
+                    self._lift_items(cond.false, chain),
+                    [],
+                    self._lift_items(cond.unknown, chain),
+                )
+            ],
         )
 
-    def _cond_mentions_attitude(self, cond):
-        if self._mentions_attitude(cond.expr):
-            return True
-        return any(
-            self._cond_mentions_attitude(item)
-            for branch in (cond.true, cond.false, cond.unknown)
-            for item in branch
-            if isinstance(item, Condition)
-        )
+    def _knower_tuples(self, chain):
+        """
+        Every (k1, .., kd) such that a1(k1, a2(k2, ... )) is stored, i.e. the
+        entities a lifted rule has to be run for.
+        """
+        out = set()
+
+        def descend(prop, level, acc):
+            if level == len(chain):
+                out.add(acc)
+            elif prop.name == chain[level] and len(prop.children) == 2:
+                who = self.create_node(prop.children[0], CREATE_NONE)
+                if who is not None:
+                    descend(prop.children[1], level + 1, acc + (self._find(who),))
+
+        for k1, ent in list(self.table_entry_list.items()):
+            for prop in ent.know.get(chain[0], []):
+                descend(prop, 1, (k1,))
+        return out
 
     def _has_free_var(self, node):
+        """True if a template variable (x, y, z, w) is still present in node."""
         return bool(self._expr_vars(node))
 
     def _is_rel(self, node):
+        """r(z) where r is a RELATION: a set of entities, not one entity."""
         return node.name in self.relations and len(node.children) == 1
 
     def _split_rel(self, eq):
+        """
+        For equal(a, b) where exactly one side is a relation term r(z),
+        return (entity_expr, r(z)); otherwise None.
+        """
         l, r = eq.children
         if self._is_rel(l) and not self._is_rel(r):
             return r, l
@@ -393,6 +474,9 @@ class Table:
             return l, r
         return None
 
+    # ------------------------------------------------------------------
+    # state
+    # ------------------------------------------------------------------
     def _snapshot(self):
         return copy.deepcopy(
             (self.table_entry_list, self.alias, self.curr)
@@ -400,11 +484,13 @@ class Table:
 
     def _restore(self, snap):
         self.table_entry_list, self.alias, self.curr = snap
+        self._version += 1
 
     def copy_table(a, b):
         a._restore(b._snapshot())
 
     def _consistent(self, fn):
+        """Run fn on a scratch copy; True if no contradiction. Always rolls back."""
         snap = self._snapshot()
         try:
             fn()
@@ -415,10 +501,14 @@ class Table:
         finally:
             self._restore(snap)
 
+    # ------------------------------------------------------------------
+    # entities
+    # ------------------------------------------------------------------
     def create(self):
         i = self.curr
         self.table_entry_list[i] = TableEntry()
         self.curr += 1
+        self._version += 1
         return i
 
     def _find(self, i):
@@ -436,32 +526,72 @@ class Table:
         ent = self.table_entry_list[self._find(a)]
         return {self._find(i) for i in ent.rel.get(name, ())}
 
-    def create_node(self, node, create=CREATE_NONE):
+    def _resolve(self, node, create=CREATE_NONE, top=True):
+        """
+        Resolve a term to the list of entities it can denote, recursively:
+
+            name                -> that entity
+            f(t), f a FUNCTION  -> f of every entity t denotes   (one each)
+            r(t), r a RELATION  -> every member of r, over every entity t denotes
+
+        so  "my sister's father's brother"  resolves step by step, whatever
+        mixture of functions and relations the path contains.
+
+        create >= CREATE_LINK   : a missing f(t) link is created (t must be unique)
+        create >= CREATE_ALL    : unknown names are created
+        create >= CREATE_PHANTOM: an empty r(t) gets an unnamed member, but only
+                                  where an entity is needed (top=False), e.g. the
+                                  sister in "john is my sister's father"
+        """
         if node.name.startswith("d_"):
-            return self._find(int(node.name[2:]))
+            return [self._find(int(node.name[2:]))]
         if not node.children:
             for key, ent in self.table_entry_list.items():
                 if node in ent.entry:
-                    return key
+                    return [key]
             if create < CREATE_ALL:
-                return None
+                return []
             out = self.create()
             self.table_entry_list[out].entry.append(node)
-            return out
-        if node.name in self.functions and len(node.children) == 1:
-            base = self.create_node(node.children[0], create)
-            if base is None:
-                return None
-            ent = self.table_entry_list[self._find(base)]
-            if node.name in ent.attr:
-                return self._find(ent.attr[node.name])
-            if create >= CREATE_LINK:
+            return [out]
+        if len(node.children) != 1:
+            return []
+        owners = self._resolve(node.children[0], create, top=False)
+        if node.name in self.functions:
+            out = []
+            for owner in owners:
+                ent = self.table_entry_list[self._find(owner)]
+                if node.name in ent.attr:
+                    out.append(self._find(ent.attr[node.name]))
+                elif create >= CREATE_LINK and len(owners) == 1:
+                    new = self.create()
+                    ent.attr[node.name] = new
+                    out.append(new)
+            return list(dict.fromkeys(out))
+        if node.name in self.relations:
+            out = []
+            for owner in owners:
+                out.extend(sorted(self._targets(owner, node.name)))
+            out = list(dict.fromkeys(out))
+            if not out and not top and create >= CREATE_PHANTOM and len(owners) == 1:
                 new = self.create()
-                ent.attr[node.name] = new
-                return new
-        return None
+                self.table_entry_list[self._find(owners[0])].rel.setdefault(
+                    node.name, set()
+                ).add(new)
+                out = [new]
+            return out
+        return []
+
+    def create_node(self, node, create=CREATE_NONE):
+        """The one entity a term denotes (None if unknown or ambiguous)."""
+        ids = self._resolve(node, create, top=False)
+        return ids[0] if len(ids) == 1 else None
 
     def equate_id(self, a, b, explicit=False):
+        """
+        Merge two entities (smaller id survives). Raises Contradiction.
+        explicit=True: the user said so; it may override a name-based default.
+        """
         a, b = self._find(a), self._find(b)
         if a == b:
             return a
@@ -470,6 +600,7 @@ class Table:
         if not explicit and b in self._targets(a, SOFT):
             raise Contradiction("assumed different (different names)")
         keep, drop = min(a, b), max(a, b)
+        self._version += 1
         q = self.table_entry_list.pop(drop)
         self.alias[drop] = keep
 
@@ -490,11 +621,14 @@ class Table:
             if key not in p.attr:
                 p.attr[key] = val
             elif key in self.functions:
-                self.equate_id(p.attr[key], val)
+                self.equate_id(p.attr[key], val)     # same entity -> same mother
             elif p.attr[key] != val:
                 raise Contradiction(key)
         return self._find(keep)
 
+    # ------------------------------------------------------------------
+    # facts
+    # ------------------------------------------------------------------
     def _set_attr(self, name, node, val):
         attr = self.table_entry_list[self._find(node)].attr
         cur = attr.get(name)
@@ -516,18 +650,22 @@ class Table:
         )
 
     def _assert_expr(self, eq, positive=True, create=CREATE_LINK):
+        """
+        Add a fact. Returns True if something was recorded, False if the
+        fact could not be expressed (skipped). Raises Contradiction on conflict.
+        """
         if eq.name == "not" and len(eq.children) == 1:
             return self._assert_expr(eq.children[0], not positive, create)
 
         if eq.name in self.attitudes and len(eq.children) == 2:
             if not positive:
-                return False
+                return False                     # "x does not know P" not stored
             who = self.create_node(eq.children[0], create)
             if who is None:
                 return False
             prop = eq.children[1]
             if eq.name in self.factive:
-                self._assert_expr(prop, True, create)
+                self._assert_expr(prop, True, create)   # may raise Contradiction
             ent = self.table_entry_list[self._find(who)]
             key = self._prop_key(prop, create)
             for name in [eq.name] + sorted(self._entailed(eq.name)):
@@ -539,10 +677,10 @@ class Table:
             if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
                 sp = self._split_rel(eq)
                 if sp is None or not positive:
-                    return False
+                    return False                 # not stored
                 ent, term = sp
                 x = self.create_node(ent, create)
-                owner = self.create_node(term.children[0], create)
+                owner = self.create_node(term.children[0], create)   # one owner
                 if x is None or owner is None:
                     return False
                 self.table_entry_list[self._find(owner)].rel.setdefault(
@@ -585,6 +723,7 @@ class Table:
         return False
 
     def _eval(self, eq, create=CREATE_NONE):
+        """Stored truth value of eq: True / False / None (unknown)."""
         if eq.name == "not" and len(eq.children) == 1:
             v = self._eval(eq.children[0], create)
             return None if v is None else (not v)
@@ -593,26 +732,9 @@ class Table:
             who = self.create_node(eq.children[0], create)
             if who is None:
                 return None
-            prop = eq.children[1]
+            key = self._prop_key(eq.children[1], create)
             ent = self.table_entry_list[self._find(who)]
-            key = self._prop_key(prop, create)
-            if self._knows(ent, eq.name, key):
-                return True
-            
-            # Recursive check across nested attitudes
-            if prop.name in self.attitudes and len(prop.children) == 2:
-                inner_who_expr = prop.children[0]
-                inner_prop = prop.children[1]
-                inner_who_id = self.create_node(inner_who_expr, create)
-                
-                for stored_prop in ent.know.get(eq.name, []):
-                    if stored_prop.name == prop.name and len(stored_prop.children) == 2:
-                        stored_inner_id = self.create_node(stored_prop.children[0], create)
-                        if inner_who_id is not None and stored_inner_id is not None:
-                            if self._find(inner_who_id) == self._find(stored_inner_id):
-                                if self._prop_key(stored_prop.children[1], create) == self._prop_key(inner_prop, create):
-                                    return True
-            return None
+            return True if self._knows(ent, eq.name, key) else None
 
         if eq.name == "equal" and len(eq.children) == 2:
             if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
@@ -621,10 +743,12 @@ class Table:
                     return None
                 ent, term = sp
                 x = self.create_node(ent, create)
-                owner = self.create_node(term.children[0], create)
-                if x is None or owner is None:
+                owners = self._resolve(term.children[0], create)      # may be a set
+                if x is None or not owners:
                     return None
-                if self._find(x) in self._targets(owner, term.name):
+                # membership is only ever proven, never disproven (open world)
+                x = self._find(x)
+                if any(x in self._targets(o, term.name) for o in owners):
                     return True
                 return None
             p = self.create_node(eq.children[0], create)
@@ -636,7 +760,7 @@ class Table:
                 return True
             if self._incompatible(p, q):
                 return False
-            return None
+            return None          # open world: not proven different
 
         if len(eq.children) == 1:
             n = self.create_node(eq.children[0], create)
@@ -658,7 +782,11 @@ class Table:
 
         return None
 
+    # ------------------------------------------------------------------
+    # rule engine
+    # ------------------------------------------------------------------
     def _bind(self, eq, env):
+        """Replace each bound variable by a reference to its entity."""
         for var, ident in env.items():
             eq = replace(eq, TreeNode(var), TreeNode(f"d_{ident}"))
         return eq
@@ -676,6 +804,11 @@ class Table:
         return out
 
     def process_rule(self, rule, env=None, answers=None):
+        """
+        Run one rule with its variables bound by env ({"x": id, "y": id, ...}).
+        Effects are applied to the table; ANSWERs are appended to `answers`.
+        Raises Contradiction on THROW or conflicting facts.
+        """
         env = env or {}
         if isinstance(rule, list):
             for item in rule:
@@ -699,6 +832,7 @@ class Table:
             elif head == "THROW":
                 raise Contradiction("THROW")
             elif head == "ASSERT":
+                # rules may create links (i's sister) but never new names
                 self._assert_expr(
                     self._bind(rule[1], env), True, CREATE_LINK
                 )
@@ -706,83 +840,60 @@ class Table:
     def _signature(self):
         return str(self)
 
-    def _lift_rule_to_knowers(self, rule, att, knower_vars):
-        """
-        Recursively lifts a rule condition/items across a chain of knower variables.
-        """
-        def wrap_prop(p):
-            res = p
-            for kn in reversed(knower_vars):
-                res = TreeNode(att, [TreeNode(kn), res])
-            return res
-
-        def transform_item(item):
-            if isinstance(item, Condition):
-                return Condition(
-                    wrap_prop(item.expr),
-                    transform_items(item.true),
-                    transform_items(item.false),
-                    transform_items(item.unknown)
-                )
-            elif isinstance(item, tuple) and item[0] == "ASSERT":
-                return ("ASSERT", wrap_prop(item[1]))
-            return item
-
-        def transform_items(items):
-            return [transform_item(it) for it in items]
-
-        if isinstance(rule, Condition):
-            return transform_item(rule)
-        elif isinstance(rule, list):
-            return transform_items(rule)
-        return rule
-
     def _propagate(self):
-        """Run all inference rules and epistemic projection rules until fixed point."""
+        """Run all inference rules until nothing changes. Raises Contradiction."""
         for _ in range(self.MAX_ROUNDS):
             self._apply_distinct()
             before = self._signature()
             ids = list(self.table_entry_list.keys())
-
-            # 1. Run base inference rules
             for rule, variables in self.inference_rules:
+                # only the variables a rule really uses are enumerated
                 for combo in itertools.product(ids, repeat=len(variables)):
                     if any(i not in self.table_entry_list for i in combo):
                         continue
                     self.process_rule(rule, dict(zip(variables, combo)))
-
-            # 2. Run multi-depth lifted epistemic rules across all agent combinations
-            for rule, variables, att in self.lifted_rules:
-                for combo in itertools.product(ids, repeat=len(variables)):
+            tuples = {}
+            for rule, variables, chain in self.lifted_rules:
+                if chain not in tuples:
+                    tuples[chain] = self._knower_tuples(chain)
+                if not tuples[chain]:
+                    continue          # nobody holds this nesting: nothing to lift
+                base = [v for v in variables if v not in KNOWERS]
+                for combo in itertools.product(ids, repeat=len(base)):
                     if any(i not in self.table_entry_list for i in combo):
                         continue
-                    self.process_rule(rule, dict(zip(variables, combo)))
-
-            # 3. Epistemic projection logic: IF x knows that y knows z THEN ASSERT x knows z
-            for x_id, ent in list(self.table_entry_list.items()):
-                for att in self.closed:
-                    for prop in list(ent.know.get(att, [])):
-                        if isinstance(prop, TreeNode) and prop.name in self.attitudes and len(prop.children) == 2:
-                            inner_prop = prop.children[1]
-                            self._assert_expr(TreeNode(att, [TreeNode(f"d_{x_id}"), inner_prop]), True, CREATE_LINK)
-
+                    for tup in tuples[chain]:
+                        if any(self._find(i) not in self.table_entry_list for i in tup):
+                            continue
+                        env = dict(zip(base, combo))
+                        env.update(zip(KNOWERS, tup))
+                        self.process_rule(rule, env)
             if self._signature() == before:
                 return
         raise RuntimeError("rules did not reach a fixed point")
 
     def process_all_rule(self):
+        """[] on success, None if the table is contradictory."""
         try:
             self._propagate()
             return []
         except Contradiction:
             return None
 
+    # ------------------------------------------------------------------
+    # public API
+    # ------------------------------------------------------------------
     def context(self, eq):
+        """
+        Tell the table a fact. Returns True if accepted,
+        None if it was inexpressible or contradicts what is known
+        (the table is rolled back in that case).
+        """
         if not self._wellformed(eq):
             return None
         snap = self._snapshot()
         try:
-            if not self._assert_expr(eq, True, CREATE_ALL):
+            if not self._assert_expr(eq, True, CREATE_PHANTOM):
                 self._restore(snap)
                 return None
             self._propagate()
@@ -792,6 +903,10 @@ class Table:
             return None
 
     def question(self, eq):
+        """
+        Yes/no query. True / False / None (unknown).
+        The table is left unchanged.
+        """
         if eq.name == "question":
             eq = eq.children[0]
         if not self._wellformed(eq):
@@ -800,20 +915,24 @@ class Table:
         try:
             return self._decide(eq)
         except Contradiction:
-            return None
+            return None          # table itself is contradictory
         finally:
             self._restore(snap)
 
     def _decide(self, eq):
         self._propagate()
-        self._eval(eq, CREATE_ALL)
-        self._propagate()
+        self._eval(eq, CREATE_ALL)       # materialise the names it mentions
+        self._propagate()                # let rules say things about them
         v = self._eval(eq, CREATE_ALL)
         if v is not None:
             return v
         return self._refute(eq)
 
     def _refute(self, eq):
+        """
+        Not stored: test by refutation. If assuming it true breaks the rules
+        it is False; if assuming it false breaks them it is True.
+        """
         if eq.name == "not" and len(eq.children) == 1:
             r = self._refute(eq.children[0])
             return None if r is None else (not r)
@@ -831,6 +950,10 @@ class Table:
         return None
 
     def ask(self, eq):
+        """
+        question(...) -> True/False/None
+        who(...)      -> list of phrases produced by the ASK templates
+        """
         if eq.name == "question":
             return self.question(eq)
         if eq.name != "who" or not eq.children:
@@ -840,11 +963,16 @@ class Table:
             self._propagate()
             target = eq.children[0]
             if self._is_rel(target):
-                base = self.create_node(target.children[0], CREATE_ALL)
-                if base is None:
+                # "who is my sister": every member of the relation
+                owners = self._resolve(target.children[0], CREATE_ALL)
+                if not owners:
                     return None
                 self._propagate()
-                outs = sorted(self._targets(base, target.name))
+                outs = sorted({
+                    m
+                    for o in owners
+                    for m in self._targets(self._find(o), target.name)
+                })
             else:
                 out = self.create_node(target, CREATE_ALL)
                 if out is None:
@@ -867,7 +995,7 @@ class Table:
             phrases = []
             for item in answers:
                 if self._has_free_var(item) or not var_in_eq(item):
-                    continue
+                    continue          # template variable x / y never got a name
                 item = swap_pronouns(item)
                 try:
                     p = actor_to_phrase(item)
