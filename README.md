@@ -163,12 +163,15 @@ mary is my mother
 alice is my sister
 i killed alice's mother
 bob knows that john knows that my mother is dead
+bob thinks that i am a girl
 
 QUESTIONS:
 does bob know that mary is dead
 does bob know that john know that mary is dead
 is mary alive
 do i know that mary is dead
+does bob think that i am a boy
+does bob think that i am a girl
 """
 }
 for name, text in suites.items():
@@ -177,8 +180,7 @@ for name, text in suites.items():
 
 ## Output of the code
 
-```
-=== RUNNING TEST SUITE: Basic Family & Identity ===
+```=== RUNNING TEST SUITE: Basic Family & Identity ===
 Context added [john is your father]: True
 Context added [mary is your mother]: True
 Context added [you are my sister]: True
@@ -245,6 +247,7 @@ Context added [mary is my mother]: True
 Context added [alice is my sister]: True
 Context added [i killed alice's mother]: True
 Context added [bob knows that john knows that my mother is dead]: True
+Context added [bob thinks that i am a girl]: True
 Q: does bob know that mary is dead
   -> True
 
@@ -255,5 +258,11 @@ Q: is mary alive
   -> False
 
 Q: do i know that mary is dead
+  -> True
+
+Q: does bob think that i am a boy
+  -> False
+
+Q: does bob think that i am a girl
   -> True
 ```
