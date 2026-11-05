@@ -49,6 +49,7 @@ class Condition:
 #   CLOSED name        x names that P, and the rules derive Q from P  =>  x names that Q.
 #                      (parsed, but not implemented by the engine yet)
 #   lines starting with # are comments
+#   HIDDEN a b         predicates that what-questions do not list ("what do i know")
 #   DISTINCT a b c     different names, different people, unless a statement
 #                      says otherwise
 #   IF expr            branches TRUE / FALSE / UNKNOWN
@@ -62,7 +63,7 @@ class Condition:
 RULES_FILE = Path(__file__).parent / "rules.txt"
 RULES = RULES_FILE.read_text(encoding="utf-8")
 
-_DECLARATIONS = ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED")
+_DECLARATIONS = ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED", "HIDDEN")
 
 
 def parse(s):
@@ -320,7 +321,7 @@ class Table:
 
     # attributes derived from the rules; never mutated, so shared between copies
     _SHARED = ("rule", "functions", "relations", "factive", "entails",
-               "closed", "attitudes", "distinct_groups", "inference_rules")
+               "closed", "attitudes", "hidden", "distinct_groups", "inference_rules")
 
     def __init__(self, rules=RULES):
         self.table_entry_list = {}
@@ -349,6 +350,11 @@ class Table:
         self.attitudes = (
             self._declared("ATTITUDE") | self.factive | mentioned | self.closed
         )
+        self.hidden = {
+            w for r in self.rule
+            if isinstance(r, tuple) and r[0] == "HIDDEN" and r[1]
+            for w in r[1].split()
+        }
         self.distinct_groups = [
             r[1].split()
             for r in self.rule
@@ -545,6 +551,153 @@ class Table:
             term = self._term_for(int(node.name[2:]))
             return term if term is not None else node
         return TreeNode(node.name, [self._named(c) for c in node.children])
+
+    def _terms_of(self, i, depth=2):
+        """Every way to say entity i: its names plus function paths such as
+        father(i) (an owner's function attribute that points at it)."""
+        i = self._find(i)
+        ent = self.table_entry_list.get(i)
+        if ent is None:
+            return []
+        out = list(ent.entry)
+        if depth > 0:
+            for j, owner in sorted(self.table_entry_list.items()):
+                if j == i:
+                    continue
+                for key, val in sorted(owner.attr.items()):
+                    if key in self.functions and self._find(val) == i:
+                        for t in self._terms_of(j, depth - 1):
+                            node = TreeNode(key, [t])
+                            if node not in out:
+                                out.append(node)
+        return out
+
+    def _sync_refs(self, sub):
+        """Carry identities the world knows into an attitude table.
+
+        "i want to kill john" talks about a person; if the world says john is
+        my father, the want table must also know that its john is father(i),
+        otherwise "do i want to kill my father" stays unknown.  Tables have
+        their own ids, so entities are matched through names / function paths.
+        """
+        if sub.depth != self.depth + 1:
+            return
+        for i in list(sub.table_entry_list):
+            if i not in sub.table_entry_list:
+                continue
+            path = sub._term_for(i)
+            if path is None:
+                continue
+            wid = self.create_node(path, CREATE_NONE)
+            if wid is None:
+                continue
+            for term in self._terms_of(wid):
+                if term == path:
+                    continue
+                if term.children:
+                    root = term
+                    while root.children:
+                        root = root.children[0]
+                    if sub.create_node(root, CREATE_NONE) is None:
+                        continue                  # sub knows nothing about that owner
+                try:
+                    a = sub.create_node(path, CREATE_ALL)
+                    b = sub.create_node(term, CREATE_ALL)
+                    if a is not None and b is not None:
+                        sub.equate_id(a, b)
+                except Contradiction:
+                    pass
+
+    # ------------------------------------------------------------------
+    # facts and what/who questions
+    # ------------------------------------------------------------------
+    def facts(self):
+        """Positive facts of this table as tuples (kind, ...terms), unnamed
+        things skipped, hidden predicates left out."""
+        out = []
+
+        def add(f):
+            if f not in out:
+                out.append(f)
+
+        for i, ent in sorted(self.table_entry_list.items()):
+            t = self._term_for(i)
+            if t is None:
+                continue
+            for other in ent.entry[1:]:
+                add(("equal", ent.entry[0], other))
+            for key, val in sorted(ent.attr.items()):
+                if key in self.functions:
+                    tt = self._term_for(self._find(val))
+                    if tt is not None and tt != TreeNode(key, [t]):
+                        add(("link", key, t, tt))
+                elif val == "true" and key not in self.hidden:
+                    add(("unary", key, t))
+            for key, targets in sorted(ent.rel.items()):
+                if key in (NE, SOFT):
+                    continue
+                for j in sorted({self._find(x) for x in targets}):
+                    tj = self._term_for(j)
+                    if tj is None:
+                        continue
+                    if key in self.relations:
+                        add(("link", key, t, tj))
+                    elif key not in self.hidden:
+                        add(("binary", key, t, tj))
+        return out
+
+    def _holder_facts(self, att, holder):
+        """Facts an entity holds under an attitude (None if nothing is known)."""
+        if holder.name == "you" and not holder.children and att != "want":
+            return self.facts()               # the table is what *I* (the AI) was told
+        who = self.create_node(holder, CREATE_NONE)
+        if who is None:
+            return None
+        sub = self.table_entry_list[self._find(who)].know.get(att)
+        if sub is None:
+            return None
+        self._sync_refs(sub)
+        facts = sub.facts()
+        if att == "want":
+            # identities copied in from the world are not things that are wanted
+            world = self.facts()
+            facts = [f for f in facts
+                     if not (f[0] in ("link", "equal") and f in world)]
+        return facts
+
+    def _query(self, pattern):
+        """query(know(i,what)) -> sentences; query(kill(who,mary)) -> terms."""
+        snap = self._snapshot()
+        try:
+            self._propagate()
+            if (pattern.name in self.attitudes and len(pattern.children) == 2
+                    and pattern.children[1] == TreeNode("what")):
+                holder = pattern.children[0]
+                facts = self._holder_facts(pattern.name, holder) or []
+                h = swap_pronouns(holder)
+                out = []
+                for f in facts:
+                    sentence = say_attitude(
+                        pattern.name, h, tuple(swap_pronouns(x) if isinstance(x, TreeNode) else x for x in f)
+                    )
+                    if sentence not in out:
+                        out.append(sentence)
+                return out
+            answers = []
+            for i in sorted(self.table_entry_list):
+                term = self._term_for(i)
+                if term is None:
+                    continue
+                bound = replace(pattern, TreeNode("who"), TreeNode(f"d_{i}"))
+                if self.question(bound) is True:
+                    text = term_text(swap_pronouns(term))
+                    if text not in answers:
+                        answers.append(text)
+            return answers
+        except Contradiction:
+            return None
+        finally:
+            self._restore(snap)
 
     def _is_rel(self, node):
         return node.name in self.relations and len(node.children) == 1
@@ -765,6 +918,7 @@ class Table:
                     ent.know[name]._absorb(ent.know[eq.name])
                 if not ent.know[name].context(prop):
                     return False
+                self._sync_refs(ent.know[name])
             return True
 
         if eq.name == "equal" and len(eq.children) == 2:
@@ -828,7 +982,9 @@ class Table:
             ent = self.table_entry_list[self._find(who)]
             if eq.name not in ent.know:
                 return None
-            return ent.know[eq.name].question(self._named(eq.children[1]))
+            sub = ent.know[eq.name]
+            self._sync_refs(sub)
+            return sub.question(self._named(eq.children[1]))
 
         if eq.name == "equal" and len(eq.children) == 2:
             if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
@@ -970,6 +1126,8 @@ class Table:
             return None
 
     def question(self, eq):
+        if eq.name == "query":
+            return self._query(eq.children[0])
         if eq.name == "question":
             eq = eq.children[0]
         if not self._wellformed(eq):
@@ -1011,6 +1169,8 @@ class Table:
     def ask(self, eq):
         if eq.name == "question":
             return self.question(eq)
+        if eq.name == "query":
+            return self._query(eq.children[0])
         if eq.name != "who" or not eq.children:
             return None
         snap = self._snapshot()

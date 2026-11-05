@@ -87,43 +87,54 @@ ANSWER: yes
 ## Demonstration of Version 2 which is in Development
 
 ```py
-from englishai.version2 import Table, code
-def run_test_suite(name, suite_text):
-    print(f"=== RUNNING TEST SUITE: {name} ===")
-    t = Table()
-    section = None    
-    for line in suite_text.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.upper() == "CONTEXT:":
-            section = "CONTEXT"
-            continue
-        elif line.upper() == "QUESTIONS:":
-            section = "QUESTIONS"
-            continue            
-        if section == "CONTEXT":
-            res = t.context(code(line))
-            print(f"Context added [{line}]: {res}")
-        elif section == "QUESTIONS":
-            eq = code(line)
-            res = None
-            if eq.name == "who":
-                res = t.ask(eq)
-            else:
-                res = t.question(eq)
-            print(f"Q: {line}\n  -> {res}\n")
-    print("\n")
-suites = {
-    "Basic Family & Identity": """
-CONTEXT:
+from englishai.version2 import *
+s = """
+john is my father
+i want to kill john
+mary killed john
+
+what do i want
+who killed john
+
+
+i killed my mother
+alice is my sister
+alice's mother is mary
+
+is mary alive
+
+
+mary is my mother
+alice is my sister
+i killed alice's mother
+bob knows that john knows that my mother is dead
+bob thinks that i am a girl
+
+does bob know that mary is dead
+does bob know that john know that mary is dead
+is mary alive
+do i know that mary is dead
+does bob think that i am a boy
+does bob think that i am a girl
+
+
+john is your father
+mary is your mother
+john is my father
+mary is my mother
+you are a girl
+bob is your brother
+
+who is my sister
+who is my brother
+
+
 john is your father
 mary is your mother
 you are my sister
 you are alice
 i am a boy
 
-QUESTIONS:
 who am i
 who are you
 who is john
@@ -134,135 +145,36 @@ is mary a girl
 are you john's son
 is mary your mother
 am i your brother
-""",
-    "Sibling Derivation": """
-CONTEXT:
-john is your father
-mary is your mother
-john is my father
-mary is my mother
-you are a girl
-bob is your brother
-
-QUESTIONS:
-who is my sister
-who is my brother
-""",
-    "Kill Derivation": """
-CONTEXT:
-i killed my mother
-alice is my sister
-alice's mother is mary
-
-QUESTIONS:
-is mary alive
-""",
-    "Knowledge Derivation": """
-CONTEXT:
-mary is my mother
-alice is my sister
-i killed alice's mother
-bob knows that john knows that my mother is dead
-bob thinks that i am a girl
-
-QUESTIONS:
-does bob know that mary is dead
-does bob know that john know that mary is dead
-is mary alive
-do i know that mary is dead
-does bob think that i am a boy
-does bob think that i am a girl
 """
-}
-for name, text in suites.items():
-    run_test_suite(name, text)
+print(answer(s))
 ```
 
 ## Output of the code
 
-```=== RUNNING TEST SUITE: Basic Family & Identity ===
-Context added [john is your father]: True
-Context added [mary is your mother]: True
-Context added [you are my sister]: True
-Context added [you are alice]: True
-Context added [i am a boy]: True
-Q: who am i
-  -> ['you', "john's son", 'my brother', "alice's brother", "mary's son"]
+```
+you want to kill john, you want john to be dead
+mary
 
-Q: who are you
-  -> ['i', 'alice', "john's daughter", "mary's daughter", 'your sister']
+False
 
-Q: who is john
-  -> ['john', 'my father', "alice's father", 'your father']
+True
+True
+False
+True
+False
+True
 
-Q: who is mary
-  -> ['mary', 'my mother', "alice's mother", 'your mother']
+i, john's daughter, mary's daughter, your sister, bob's sister
+bob, john's son, my brother, mary's son, your brother
 
-Q: who is alice's brother
-  -> ['you', "john's son", 'my brother', "alice's brother", "mary's son"]
-
-Q: is john a boy
-  -> True
-
-Q: is mary a girl
-  -> True
-
-Q: are you john's son
-  -> False
-
-Q: is mary your mother
-  -> True
-
-Q: am i your brother
-  -> True
-
-
-
-=== RUNNING TEST SUITE: Sibling Derivation ===
-Context added [john is your father]: True
-Context added [mary is your mother]: True
-Context added [john is my father]: True
-Context added [mary is my mother]: True
-Context added [you are a girl]: True
-Context added [bob is your brother]: True
-Q: who is my sister
-  -> ['i', "john's daughter", "mary's daughter", 'your sister', "bob's sister"]
-
-Q: who is my brother
-  -> ['bob', "john's son", 'my brother', "mary's son", 'your brother']
-
-
-
-=== RUNNING TEST SUITE: Kill Derivation ===
-Context added [i killed my mother]: True
-Context added [alice is my sister]: True
-Context added [alice's mother is mary]: True
-Q: is mary alive
-  -> False
-
-
-
-=== RUNNING TEST SUITE: Knowledge Derivation ===
-Context added [mary is my mother]: True
-Context added [alice is my sister]: True
-Context added [i killed alice's mother]: True
-Context added [bob knows that john knows that my mother is dead]: True
-Context added [bob thinks that i am a girl]: True
-Q: does bob know that mary is dead
-  -> True
-
-Q: does bob know that john know that mary is dead
-  -> True
-
-Q: is mary alive
-  -> False
-
-Q: do i know that mary is dead
-  -> True
-
-Q: does bob think that i am a boy
-  -> False
-
-Q: does bob think that i am a girl
-  -> True
+you, john's son, my brother, alice's brother, mary's son
+i, alice, john's daughter, mary's daughter, your sister
+john, my father, alice's father, your father
+mary, my mother, alice's mother, your mother
+you, john's son, my brother, alice's brother, mary's son
+True
+True
+False
+True
+True
 ```

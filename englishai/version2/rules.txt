@@ -9,8 +9,12 @@ FACTIVE know
 CLOSED know
 ATTITUDE think
 CLOSED think
+ATTITUDE want
+CLOSED want
 
 ENTAILS know think
+
+HIDDEN boy girl
 
 DISTINCT i you mary john alice bob
 

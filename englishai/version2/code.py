@@ -434,8 +434,20 @@ def parse_verb(words):
 
 
 # verbs about what someone holds: know(john, die(mary)), want(john, kill(john, mary))
-# "john thinks that mary is dead", "john wants to kill mary"
 ATTITUDE_VERBS = {"know", "think", "want"}
+
+# "x knows / thinks THAT <sentence>"          ->  know(x, S) / think(x, S)
+THAT_VERBS = {"know", "think"}
+
+# "x wants [y] TO <infinitive>"              ->  want(x, P)
+#   i want john to be dead      want(i,die(john))
+#   i want john to kill mary    want(i,kill(john,mary))
+#   i want to kill mary         want(i,kill(i,mary))
+WANT_VERBS = {"want"}
+
+DO_AUX = ("do", "does", "did")
+
+PRONOUNS = ["she", "he", "i", "we", "they", "you"]
 
 
 VALID_NOUNS = {
@@ -595,9 +607,12 @@ def split_sentence(words):
         ("aux", valid_aux),
         ("verb", valid_verb),
         ("to", lambda x: valid_given("to", x)),
+        ("be", lambda x: valid_given("be", x)),      # infinitive "to be dead"
         ("not", lambda x: valid_given("not", x)),
         ("that", lambda x: valid_given("that", x)),
         ("who", lambda x: valid_given("who", x)),
+        ("whom", lambda x: valid_given("whom", x)),
+        ("what", lambda x: valid_given("what", x)),
         ("noun", valid_noun),
         ("adjective", valid_adjective),
     ]
@@ -721,6 +736,251 @@ def combine_features(split, funcs):
     return result
 
 
+# ---------------------------------------------------------------------------
+# want
+# ---------------------------------------------------------------------------
+def _bad_reflexive(subject_tree, obj_tree, word):
+    """'i want to kill me' is wrong, 'i want to kill myself' is right."""
+    if obj_tree == subject_tree and obj_tree.name in PRONOUNS:
+        return len(word) <= 4 or word[-4:] != "self"
+    return False
+
+
+def _infinitive(subject, split, funcs):
+    """The part after 'to' of a want sentence, as a tree about `subject`.
+
+        die              -> die(subject)
+        kill mary        -> kill(subject, mary)
+        be dead          -> die(subject)
+        be a girl        -> girl(subject)
+    """
+    if funcs == ["verb"]:
+        root = parse_verb(split[0])["root"]
+        if root in ("kill",):                  # kill needs an object
+            return None
+        return TreeNode(root, [subject])
+    if funcs == ["verb", "actor"]:
+        root = parse_verb(split[0])["root"]
+        obj = actor(split[1])
+        if obj["form"] == "subject":           # "to kill she"
+            return None
+        if _bad_reflexive(subject, obj["tree"], split[1][0].lower()):
+            return None
+        return TreeNode(root, [subject, obj["tree"]])
+    if funcs == ["be", "adjective"]:
+        return subject.fx(parse_adjective(split[1]))
+    if funcs == ["be", "noun"]:
+        return subject.fx(parse_category(split[1])["root"])
+    return None
+
+
+def parse_want(split, funcs):
+    """Statements and yes/no questions with want.
+
+        i want john to be dead       want(i,die(john))
+        i want john to kill mary     want(i,kill(john,mary))
+        i want to kill mary          want(i,kill(i,mary))
+        i want to die                want(i,die(i))
+        does john want mary to die   question(want(john,die(mary)))
+
+    Returns None when the chunks are not a want sentence.
+    """
+    i = 0
+    question = False
+    if funcs[:1] == ["verb"] and split[0][0].lower() in DO_AUX:
+        question = True
+        i = 1
+    if len(funcs) < i + 3 or funcs[i] != "actor" or funcs[i + 1] != "verb":
+        return None
+    want_verb = parse_verb(split[i + 1])
+    if want_verb["root"] not in WANT_VERBS:
+        return None
+    if question and split[i + 1][0].lower() not in WANT_VERBS:
+        return None                            # "does john wants ..."
+    wanter = actor(split[i])
+    if wanter["form"] == "object":             # "me want ..."
+        return None
+    j = i + 2
+    if funcs[j] == "actor":                    # i want JOHN to ...
+        who = actor(split[j])
+        if who["form"] == "subject":           # "i want he to die"
+            return None
+        subject = who["tree"]
+        j += 1
+    else:                                      # i want to ...
+        subject = wanter["tree"]
+    if j >= len(funcs) or funcs[j] != "to":
+        return None
+    content = _infinitive(subject, split[j + 1:], funcs[j + 1:])
+    if content is None:
+        return None
+    out = TreeNode("want", [wanter["tree"], content])
+    return out.fx("question") if question else out
+
+
+# ---------------------------------------------------------------------------
+# what / who questions
+#
+#   what do i know          query(know(i,what))
+#   what does john want     query(want(john,what))
+#   who killed mary         query(kill(who,mary))
+#   who did i kill          query(kill(i,who))
+#   who wants to kill mary  query(want(who,kill(who,mary)))
+#   who is dead             query(die(who))
+#
+# The sentence is rewritten as a statement about a placeholder name
+# ("lucy killed mary"), parsed normally, and the placeholder becomes `who`.
+# ---------------------------------------------------------------------------
+PLACEHOLDERS = ["lucy", "sarah", "emma", "david", "james", "michael"]
+
+
+def _has_node(tree, name):
+    return tree.name == name or any(_has_node(c, name) for c in tree.children)
+
+
+def _is_actor(words):
+    try:
+        return bool(words) and actor(words) is not None
+    except Exception:
+        return False
+
+
+def parse_wh(words):
+    lower = [w.lower() for w in words]
+    if len(lower) < 2 or lower[0] not in ("who", "whom", "what"):
+        return None
+    rest, rest_l = words[1:], lower[1:]
+    if lower[0] == "what":
+        # what do/does/did <actor> know/think/want
+        if len(rest) >= 3 and rest_l[0] in DO_AUX:
+            try:
+                root = parse_verb([rest_l[-1]])["root"]
+                if root not in ATTITUDE_VERBS:
+                    return None
+                holder = actor(rest[1:-1])["tree"]
+            except ValueError:
+                return None
+            return normalize_synonyms(
+                TreeNode("query", [TreeNode(root, [holder, TreeNode("what")])])
+            )
+        return None
+    if rest_l[0] in DO_AUX:                      # who did i kill / who does john want to kill
+        statement = rest[1:]
+        if not statement:
+            return None
+        placeholder = next((p for p in PLACEHOLDERS if p not in lower), None)
+        statement = statement + [placeholder]
+    elif rest_l[0] in ("is", "are", "was", "were") and _is_actor(rest[1:]):
+        return None                              # "who is my father": the who-is template
+    else:                                        # who killed mary / who is dead
+        placeholder = next((p for p in PLACEHOLDERS if p not in lower), None)
+        statement = [placeholder] + rest
+    try:
+        inner = code(" ".join(statement))
+    except ValueError:
+        return None
+    if inner is None:
+        return None
+    inner = replace(inner, TreeNode(placeholder), TreeNode("who"))
+    if not _has_node(inner, "who"):
+        return None
+    return TreeNode("query", [inner])
+
+
+# ---------------------------------------------------------------------------
+# saying facts in English (for "what do i know")
+# ---------------------------------------------------------------------------
+POSSESSIVE = {"i": "my", "you": "your", "he": "his", "she": "her",
+              "it": "its", "we": "our", "they": "their"}
+ADJECTIVE_OF = {"die": "dead", "live": "alive", "happy": "happy", "sad": "sad"}
+# events are told in the past ("you killed mary"), states in the present
+VERB_PAST = {"kill": "killed", "eat": "ate", "give": "gave", "take": "took",
+             "go": "went", "tell": "told", "say": "said", "come": "came",
+             "run": "ran", "walk": "walked", "see": "saw", "help": "helped"}
+
+
+def term_text(t):
+    if not t.children:
+        return t.name
+    owner = t.children[0]
+    if not owner.children and owner.name in POSSESSIVE:
+        own = POSSESSIVE[owner.name]
+    else:
+        own = term_text(owner) + "'s"
+    return f"{own} {t.name}"
+
+
+def _plural(t):
+    return not t.children and t.name in ("you", "we", "they")
+
+
+def _be(t):
+    if not t.children and t.name == "i":
+        return "am"
+    return "are" if _plural(t) else "is"
+
+
+def _present(root, t):
+    if (not t.children and t.name in ("i",)) or _plural(t):
+        return root
+    if root.endswith(("s", "sh", "ch", "x", "o")):
+        return root + "es"
+    if root.endswith("y") and root[-2:-1] not in "aeiou":
+        return root[:-1] + "ies"
+    return root + "s"
+
+
+def _article(word):
+    return ("an " if word[0] in "aeiou" else "a ") + word
+
+
+def _predicate(pred, t):
+    if pred in ADJECTIVE_OF:
+        return f"{_be(t)} {ADJECTIVE_OF[pred]}"
+    return f"{_be(t)} {_article(pred)}"
+
+
+def say_fact(fact):
+    kind = fact[0]
+    if kind == "equal":
+        return f"{term_text(fact[1])} {_be(fact[1])} {term_text(fact[2])}"
+    if kind == "link":
+        _, rel, owner, target = fact
+        return f"{term_text(target)} {_be(target)} {term_text(TreeNode(rel, [owner]))}"
+    if kind == "unary":
+        return f"{term_text(fact[2])} {_predicate(fact[1], fact[2])}"
+    _, rel, a, b = fact
+    verb = VERB_PAST.get(rel) or _present(rel, a)
+    return f"{term_text(a)} {verb} {term_text(b)}"
+
+
+def _to_clause(fact, holder):
+    """The 'to ...' part of 'you want to kill mary / john to be dead'."""
+    kind = fact[0]
+    if kind == "unary":
+        subject, rest = fact[2], "be " + (
+            ADJECTIVE_OF.get(fact[1]) or _article(fact[1]))
+    elif kind == "binary":
+        subject, rest = fact[2], f"{fact[1]} {term_text(fact[3])}"
+    elif kind == "link":
+        subject = fact[3]
+        rest = f"be {term_text(TreeNode(fact[1], [fact[2]]))}"
+    else:
+        subject, rest = fact[1], f"be {term_text(fact[2])}"
+    if subject == holder:
+        return f"to {rest}"
+    return f"{term_text(subject)} to {rest}"
+
+
+def say_attitude(att, holder, fact):
+    """you know that mary is dead / you want to kill mary / john wants mary to die"""
+    h = f"{term_text(holder)} {_present(att, holder)}"
+    if att == "want":
+        return f"{h} {_to_clause(fact, holder)}"
+    return f"{h} that {say_fact(fact)}"
+
+
+
 def infer_equation2(split, funcs):
     if funcs == ["actor", "verb", "actor", "that", "sentence"]:
         a = actor(split[0])["tree"]
@@ -733,7 +993,7 @@ def infer_equation2(split, funcs):
     last_actor = None
     if funcs == ["actor", "verb", "that", "sentence"]:
         root = parse_verb(split[1])["root"]
-        if root in ATTITUDE_VERBS:
+        if root in THAT_VERBS:
             try:
                 inner = code(" ".join(split[3]))
             except ValueError:
@@ -743,10 +1003,10 @@ def infer_equation2(split, funcs):
             return TreeNode(root, [actor(split[0])["tree"], inner])
     if (
         funcs == ["verb", "actor", "verb", "that", "sentence"]
-        and split[0][0].lower() in ("did", "does", "do")
+        and split[0][0].lower() in DO_AUX
     ):
         root = parse_verb(split[2])["root"]
-        if root in ATTITUDE_VERBS:
+        if root in THAT_VERBS:
             try:
                 inner = code(" ".join(split[4]))
             except ValueError:
@@ -774,21 +1034,9 @@ def infer_equation2(split, funcs):
         if actor(split[lst[0]])["tree"] == actor(split[lst[1]])["tree"] and last_actor["tree"].name in ["she", "he", "i", "we", "they", "you"]:
             if len(split[lst[1]][0]) <= 4 or split[lst[1]][0][-4:] != "self":
                 return None
-    if (
-        funcs in (
-            ["verb", "actor", "verb", "to", "verb"],
-            ["verb", "actor", "verb", "to", "verb", "actor"],
-        )
-        and split[0][0].lower() in ("did", "does", "do")
-        and parse_verb(split[2])["root"] in ATTITUDE_VERBS
-    ):
-        # does john want to kill mary / does john want to die
-        a1 = actor(split[1])["tree"]
-        v2 = parse_verb(split[4])["root"]
-        args = [a1] if len(funcs) == 5 else [a1, last_actor["tree"]]
-        return TreeNode(
-            parse_verb(split[2])["root"], [a1, TreeNode(v2, args)]
-        ).fx("question")
+    want = parse_want(split, funcs)
+    if want is not None:
+        return want
     if funcs == ["who", "aux", "actor"]:
         a = actor(split[2])["tree"]
         return a.fx("who")
@@ -807,7 +1055,7 @@ def infer_equation2(split, funcs):
         return a.fx(parse_adjective(split[2])).fx("question")
     if (
         funcs == ["verb", "actor", "verb", "actor"]
-        and split[0][0].lower() in ("did", "does", "do")
+        and split[0][0].lower() in DO_AUX
     ):
         a, b = actor(split[1])["tree"], last_actor["tree"]
         return TreeNode(parse_verb(split[2])["root"], [a, b]).fx("question")
@@ -816,11 +1064,15 @@ def infer_equation2(split, funcs):
         return code(lst).fx("not")
     if funcs == ["actor", "verb", "to", "verb"]:
         v1 = parse_verb(split[1])["root"]
+        if v1 in WANT_VERBS:                   # want is handled by parse_want
+            return None
         v2 = parse_verb(split[3])["root"]
         a1 = actor(split[0])["tree"]
         return TreeNode(v1, [a1, a1.fx(v2)])
     if funcs == ["actor", "verb", "to", "verb", "actor"]:
         v1 = parse_verb(split[1])["root"]
+        if v1 in WANT_VERBS:
+            return None
         v2 = parse_verb(split[3])["root"]
         a1 = actor(split[0])["tree"]
         return TreeNode(v1, [a1, TreeNode(v2, [a1, last_actor["tree"]])])
@@ -851,6 +1103,9 @@ def infer_equation(split, funcs):
 def code(sentence):
     words = sentence.split()
     lower = [w.lower() for w in words]
+    wh = parse_wh(words)
+    if wh is not None:
+        return wh
     limit = lower.index("that") if "that" in lower else len(words)
     if "not" in lower[:limit]:
         neg_index = lower.index("not")
