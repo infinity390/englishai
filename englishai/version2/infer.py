@@ -491,6 +491,46 @@ class Table:
                         return TreeNode(key, [inner])
         return None
 
+    def _ensure(self, i):
+        i = self._find(i)
+        if i not in self.table_entry_list:
+            self.table_entry_list[i] = TableEntry()
+            self.curr = max(self.curr, i + 1)
+            self._version += 1
+        return i
+
+    def _absorb(self, other):
+        """Add everything in `other` to this table.  Both tables must share one
+        id space (this table was seeded as a copy of `other`).  Nested attitude
+        tables are not copied."""
+        for i in list(other.table_entry_list):
+            self._ensure(i)
+        for d, k in other.alias.items():
+            a, b = self._ensure(d), self._ensure(k)
+            if a != b:
+                self.equate_id(a, b, explicit=True)
+        for i, oe in other.table_entry_list.items():
+            se = self.table_entry_list[self._find(i)]
+            for e in oe.entry:
+                if e not in se.entry:
+                    se.entry.append(e)
+            for key, val in oe.attr.items():
+                se = self.table_entry_list[self._find(i)]
+                if key in self.functions:
+                    val = self._ensure(val)
+                    if key in se.attr:
+                        self.equate_id(se.attr[key], val)
+                    else:
+                        se.attr[key] = val
+                elif key not in se.attr:
+                    se.attr[key] = val
+                elif se.attr[key] != val:
+                    raise Contradiction(key)
+            for key, targets in oe.rel.items():
+                se = self.table_entry_list[self._find(i)]
+                se.rel.setdefault(key, set()).update(self._ensure(t) for t in targets)
+        self._propagate()
+
     def _named(self, node):
         """Replace d_<id> leaves by a name or function term denoting the entity.
 
@@ -709,8 +749,20 @@ class Table:
             prop = self._named(prop)
             ent = self.table_entry_list[self._find(who)]
             for name in [eq.name] + sorted(self._entailed(eq.name)):
-                if name not in ent.know:
+                if name == eq.name and name in self.factive:
+                    # factive: the table is just the current world, so rebuild it
+                    # (otherwise it goes stale when later facts are learned)
                     ent.know[name] = _make_nested_table(self, name)
+                elif name not in ent.know:
+                    if eq.name in self.factive and eq.name in ent.know:
+                        # x knows P => x thinks everything x knows: seed the
+                        # weaker table from the stronger one (same id space)
+                        ent.know[name] = copy.deepcopy(ent.know[eq.name])
+                        ent.know[name].seeded = True
+                    else:
+                        ent.know[name] = _make_nested_table(self, name)
+                elif getattr(ent.know[name], "seeded", False) and eq.name in ent.know:
+                    ent.know[name]._absorb(ent.know[eq.name])
                 if not ent.know[name].context(prop):
                     return False
             return True
