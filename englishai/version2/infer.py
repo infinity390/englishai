@@ -475,20 +475,35 @@ class Table:
     def _has_free_var(self, node):
         return bool(self._expr_vars(node))
 
+    def _term_for(self, i, seen=()):
+        """A name or function term (e.g. father(you)) that denotes entity i, or None."""
+        i = self._find(i)
+        ent = self.table_entry_list.get(i)
+        if ent is None or i in seen:
+            return None
+        if ent.entry:
+            return ent.entry[0]
+        for j, owner in self.table_entry_list.items():
+            for key, val in owner.attr.items():
+                if key in self.functions and self._find(val) == i:
+                    inner = self._term_for(j, seen + (i,))
+                    if inner is not None:
+                        return TreeNode(key, [inner])
+        return None
+
     def _named(self, node):
-        """Replace d_<id> leaves by the entity's first name (if it has one).
+        """Replace d_<id> leaves by a name or function term denoting the entity.
 
         Nested attitude tables have their own id space, so a proposition that
-        is moved into one must refer to entities by name, not by parent id.
+        is moved into one must refer to entities by name ("mary") or by a path
+        from a named entity ("father(you)"), not by parent id.  Entities with
+        no such description keep their d_<id>.
         """
         if not isinstance(node, TreeNode):
             return node
         if not node.children and node.name.startswith("d_") and node.name[2:].isdigit():
-            i = self._find(int(node.name[2:]))
-            ent = self.table_entry_list.get(i)
-            if ent is not None and ent.entry:
-                return ent.entry[0]
-            return node
+            term = self._term_for(int(node.name[2:]))
+            return term if term is not None else node
         return TreeNode(node.name, [self._named(c) for c in node.children])
 
     def _is_rel(self, node):
