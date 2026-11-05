@@ -553,8 +553,9 @@ class Table:
         return TreeNode(node.name, [self._named(c) for c in node.children])
 
     def _terms_of(self, i, depth=2):
-        """Every way to say entity i: its names plus function paths such as
-        father(i) (an owner's function attribute that points at it)."""
+        """Every way to refer to entity i: names, function paths, and
+        relation paths such as sister(i) when i is one of the owner's sisters.
+        """
         i = self._find(i)
         ent = self.table_entry_list.get(i)
         if ent is None:
@@ -562,10 +563,25 @@ class Table:
         out = list(ent.entry)
         if depth > 0:
             for j, owner in sorted(self.table_entry_list.items()):
+                j = self._find(j)
                 if j == i:
                     continue
+
+                # One-valued paths, e.g. father(i).
                 for key, val in sorted(owner.attr.items()):
                     if key in self.functions and self._find(val) == i:
+                        for t in self._terms_of(j, depth - 1):
+                            node = TreeNode(key, [t])
+                            if node not in out:
+                                out.append(node)
+
+                # Many-valued paths, e.g. sister(i).  These are important
+                # when an attitude table must recognize a person by a
+                # relationship already known in the outer world.
+                for key, targets in sorted(owner.rel.items()):
+                    if key not in self.relations:
+                        continue
+                    if i in {self._find(target) for target in targets}:
                         for t in self._terms_of(j, depth - 1):
                             node = TreeNode(key, [t])
                             if node not in out:
@@ -575,10 +591,10 @@ class Table:
     def _sync_refs(self, sub):
         """Carry identities the world knows into an attitude table.
 
-        "i want to kill john" talks about a person; if the world says john is
-        my father, the want table must also know that its john is father(i),
-        otherwise "do i want to kill my father" stays unknown.  Tables have
-        their own ids, so entities are matched through names / function paths.
+        A person mentioned in an attitude may also be known in the world
+        through a name, a function path (father(i)), or a relation path
+        (sister(i)).  The nested table has its own ids, so synchronize those
+        references without treating the identity links as wanted facts.
         """
         if sub.depth != self.depth + 1:
             return
@@ -599,12 +615,23 @@ class Table:
                     while root.children:
                         root = root.children[0]
                     if sub.create_node(root, CREATE_NONE) is None:
-                        continue                  # sub knows nothing about that owner
+                        continue  # the attitude table knows nothing about that owner
+
                 try:
-                    a = sub.create_node(path, CREATE_ALL)
-                    b = sub.create_node(term, CREATE_ALL)
-                    if a is not None and b is not None:
-                        sub.equate_id(a, b)
+                    if sub._is_rel(term):
+                        # For a relation path, create the relationship in the
+                        # nested table and attach the already-known person to it.
+                        # _assert_expr handles "person = sister(owner)".
+                        sub._assert_expr(
+                            TreeNode("equal", [path, term]),
+                            True,
+                            CREATE_LINK,
+                        )
+                    else:
+                        a = sub.create_node(path, CREATE_ALL)
+                        b = sub.create_node(term, CREATE_ALL)
+                        if a is not None and b is not None:
+                            sub.equate_id(a, b)
                 except Contradiction:
                     pass
 

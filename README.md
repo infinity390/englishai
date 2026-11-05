@@ -134,12 +134,14 @@ mary is your mother
 you are my sister
 you are alice
 i am a boy
+you want to kill me
 
 who am i
 who are you
 who is john
 who is mary
 who is alice's brother
+do you want to kill alice's brother
 is john a boy
 is mary a girl
 are you john's son
@@ -172,6 +174,7 @@ i, alice, john's daughter, mary's daughter, your sister
 john, my father, alice's father, your father
 mary, my mother, alice's mother, your mother
 you, john's son, my brother, alice's brother, mary's son
+True
 True
 True
 False
