@@ -12,6 +12,7 @@ CREATE_ALL = 2    # may also create new named entities (statements, questions)
 CREATE_PHANTOM = 3  # statements only: "my sister's father" invents a sister if none is known
 
 VARS = ("x", "y", "z", "w")   # rule variables; each ranges over entities
+ALL_VARS = VARS + tuple(f"k{i}" for i in range(1, 9))   # every variable name rules may use
 NE = "!="         # rel key: ids an entity is known to differ from (hard fact)
 SOFT = "~="       # rel key: ids assumed different because of their names (default)
 
@@ -46,6 +47,7 @@ class Condition:
 #   ATTITUDE name      attitude that only records what x holds (no truth)
 #   ENTAILS a b        x a-s that P  =>  x b-s that P   (know => think)
 #   CLOSED name        x names that P, and the rules derive Q from P  =>  x names that Q.
+#                      (parsed, but not implemented by the engine yet)
 #   lines starting with # are comments
 #   DISTINCT a b c     different names, different people, unless a statement
 #                      says otherwise
@@ -54,9 +56,13 @@ class Condition:
 #   THROW              contradiction
 #   ASK expr           answer template for who-questions
 #   ANSWER expr        a result for the enclosing ASK
+#
+# Blocks may be indented by any consistent amount (1, 2, 4 spaces ...).
 # ---------------------------------------------------------------------------
 RULES_FILE = Path(__file__).parent / "rules.txt"
 RULES = RULES_FILE.read_text(encoding="utf-8")
+
+_DECLARATIONS = ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED")
 
 
 def parse(s):
@@ -65,6 +71,12 @@ def parse(s):
         for x in s.splitlines()
         if x.strip() and not x.strip().startswith("#")
     ]
+
+    def child_indent(i, parent):
+        """Indentation of the child block starting at line i (any depth > parent)."""
+        if i < len(lines) and lines[i][0] > parent:
+            return lines[i][0]
+        return parent + 1
 
     def parse_block(i, indent):
         result = []
@@ -92,17 +104,17 @@ def parse(s):
                             f"Expected TRUE/FALSE/UNKNOWN, got {text2!r}"
                         )
                     i += 1
-                    branch, i = parse_block(i, level2 + 1)
+                    branch, i = parse_block(i, child_indent(i, level2))
                     branches[text2].extend(branch)
                 result.append(condition)
             elif text.startswith("ASK "):
                 expr = text[4:]
                 i += 1
-                children, i = parse_block(i, level + 1)
+                children, i = parse_block(i, child_indent(i, level))
                 result.append(("ASK", code(expr), children))
             else:
                 head, *sentence = text.split(maxsplit=1)
-                if head in ("FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED"):
+                if head in _DECLARATIONS:
                     result.append((head, sentence[0] if sentence else None))
                 elif sentence:
                     result.append((head, code(sentence[0])))
@@ -157,9 +169,18 @@ def collect_id_nodes(node):
     return out
 
 
+def _strip_ids(node):
+    """Replace internal d_<id> references by a plain actor so they can be validated."""
+    if not isinstance(node, TreeNode):
+        return node
+    if not node.children and node.name.startswith("d_") and node.name[2:].isdigit():
+        return TreeNode("i")
+    return TreeNode(node.name, [_strip_ids(c) for c in node.children])
+
+
 def valid_actor_eq(eq):
     try:
-        actor_to_phrase(eq)
+        actor_to_phrase(_strip_ids(eq))
     except Exception:
         return False
     return True
@@ -207,7 +228,13 @@ class TableEntry:
 
 
 def _merge_tables(target_table, source_table):
-    """Recursively merges source nested Table into target nested Table."""
+    """Recursively merge a source nested Table into a target nested Table.
+
+    Ids in the two tables may not mean the same thing, so every source id is
+    first mapped to a target id (by name where possible) and all links are
+    translated through that mapping.
+    """
+    mapping = {}                                   # source id -> target id
     for src_id, src_ent in source_table.table_entry_list.items():
         target_id = None
         for eq in src_ent.entry:
@@ -216,36 +243,67 @@ def _merge_tables(target_table, source_table):
                 target_id = resolved[0]
                 break
         if target_id is None:
-            target_id = target_table.create()
-        target_ent = target_table.table_entry_list[target_table._find(target_id)]
-        for eq in src_ent.entry:
-            if eq not in target_ent.entry:
-                target_ent.entry.append(eq)
-        for k, v in src_ent.attr.items():
-            if k not in target_ent.attr:
-                target_ent.attr[k] = v
-        for k, targets in src_ent.rel.items():
-            target_ent.rel.setdefault(k, set()).update(targets)
-        for k, sub_sub in src_ent.know.items():
-            if k not in target_ent.know:
-                target_ent.know[k] = copy.deepcopy(sub_sub)
+            if (src_id not in target_table.table_entry_list
+                    and src_id not in target_table.alias):
+                # nothing clashes: keep the shared id space so d_<id> stays valid
+                target_table.table_entry_list[src_id] = TableEntry()
+                target_table.curr = max(target_table.curr, src_id + 1)
+                target_table._version += 1
+                target_id = src_id
             else:
-                _merge_tables(target_ent.know[k], sub_sub)
+                target_id = target_table.create()
+        mapping[src_id] = target_id
+
+    def tr(i):
+        i = source_table._find(i)
+        if i not in mapping:
+            mapping[i] = target_table.create()
+        return target_table._find(mapping[i])
+
+    def tent(src_id):
+        return target_table.table_entry_list[target_table._find(mapping[src_id])]
+
+    for src_id, src_ent in list(source_table.table_entry_list.items()):
+        for eq in src_ent.entry:
+            if eq not in tent(src_id).entry:
+                tent(src_id).entry.append(eq)
+        for k, v in src_ent.attr.items():
+            val = tr(v) if k in source_table.functions else v
+            cur = tent(src_id).attr.get(k)
+            if cur is None:
+                tent(src_id).attr[k] = val
+            elif k in target_table.functions:
+                target_table.equate_id(cur, val)
+            elif cur != val:
+                raise Contradiction(k)
+        for k, targets in src_ent.rel.items():
+            tent(src_id).rel.setdefault(k, set()).update(tr(t) for t in targets)
+        for k, sub_sub in src_ent.know.items():
+            ent = tent(src_id)
+            if k not in ent.know:
+                ent.know[k] = copy.deepcopy(sub_sub)
+            else:
+                _merge_tables(ent.know[k], sub_sub)
     target_table._propagate()
 
 
 def _make_nested_table(parent_table, attitude_name):
     """
     Creates a nested Table for an attitude.
-    Knowledge inheritance ONLY takes place if the attitude is FACTIVE (FACTITUDE).
-    Otherwise (if ATTITUDE), no knowledge inheritance takes place.
+    Knowledge inheritance ONLY takes place if the attitude is FACTIVE.
+    Otherwise (plain ATTITUDE), the nested table starts fresh/isolated.
+    The (immutable) parsed rules are shared with the parent, not re-derived.
     """
-    sub_table = Table(rules=parent_table.rule)
-    sub_table.curr = parent_table.curr
+    sub_table = Table.__new__(Table)
+    for k in Table._SHARED:
+        setattr(sub_table, k, getattr(parent_table, k))
+    sub_table.table_entry_list = {}
     sub_table.alias = copy.deepcopy(parent_table.alias)
-    
+    sub_table.curr = parent_table.curr
+    sub_table._version = 0
+    sub_table.depth = parent_table.depth + 1
+
     if attitude_name in parent_table.factive:
-        # FACTITUDE: inherit knowledge/state from parent table
         for k, v in parent_table.table_entry_list.items():
             sub_table.table_entry_list[k] = TableEntry(
                 entry=copy.deepcopy(v.entry),
@@ -253,22 +311,24 @@ def _make_nested_table(parent_table, attitude_name):
                 rel=copy.deepcopy(v.rel),
                 know={}
             )
-    else:
-        # ATTITUDE: no knowledge inherit (starts fresh/isolated)
-        pass
-        
     return sub_table
 
 
 class Table:
     MAX_ROUNDS = 100
+    MAX_DEPTH = 2          # how deeply "x knows that y thinks that ..." tables may nest
+
+    # attributes derived from the rules; never mutated, so shared between copies
+    _SHARED = ("rule", "functions", "relations", "factive", "entails",
+               "closed", "attitudes", "distinct_groups", "inference_rules")
 
     def __init__(self, rules=RULES):
         self.table_entry_list = {}
         self.alias = {}        # merged-away id -> surviving id
         self.curr = 0
         self._version = 0      # bumped whenever entities are created / merged / restored
-        
+        self.depth = 0         # nesting level of attitude tables
+
         if isinstance(rules, str):
             self.rule = parse(rules)
         else:
@@ -297,8 +357,17 @@ class Table:
         # rules that are run to a fixed point (everything except templates)
         self.inference_rules = [
             (r, self._rule_vars(r)) for r in self.rule
-            if not (isinstance(r, tuple) and r[0] in ("ASK", "FUNCTION", "RELATION", "DISTINCT", "FACTIVE", "ATTITUDE", "ENTAILS", "CLOSED"))
+            if not (isinstance(r, tuple) and r[0] == "ASK") and not (
+                isinstance(r, tuple) and r[0] in _DECLARATIONS
+            )
         ]
+
+    def __deepcopy__(self, memo):
+        new = Table.__new__(Table)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            setattr(new, k, v if k in self._SHARED else copy.deepcopy(v, memo))
+        return new
 
     def _declared(self, head):
         return {
@@ -375,7 +444,7 @@ class Table:
 
     def _expr_vars(self, node):
         out = set()
-        if not node.children and node.name in ("x", "y", "z", "w", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"):
+        if not node.children and node.name in ALL_VARS:
             out.add(node.name)
         for c in node.children:
             out |= self._expr_vars(c)
@@ -401,11 +470,26 @@ class Table:
                         found.update(self._expr_vars(part))
 
         walk(rule)
-        all_vars = ("x", "y", "z", "w", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8")
-        return [v for v in all_vars if v in found]
+        return [v for v in ALL_VARS if v in found]
 
     def _has_free_var(self, node):
         return bool(self._expr_vars(node))
+
+    def _named(self, node):
+        """Replace d_<id> leaves by the entity's first name (if it has one).
+
+        Nested attitude tables have their own id space, so a proposition that
+        is moved into one must refer to entities by name, not by parent id.
+        """
+        if not isinstance(node, TreeNode):
+            return node
+        if not node.children and node.name.startswith("d_") and node.name[2:].isdigit():
+            i = self._find(int(node.name[2:]))
+            ent = self.table_entry_list.get(i)
+            if ent is not None and ent.entry:
+                return ent.entry[0]
+            return node
+        return TreeNode(node.name, [self._named(c) for c in node.children])
 
     def _is_rel(self, node):
         return node.name in self.relations and len(node.children) == 1
@@ -430,10 +514,13 @@ class Table:
         self.table_entry_list, self.alias, self.curr = snap
         self._version += 1
 
-    def copy_table(a, b):
-        a._restore(b._snapshot())
+    def copy_table(self, other):
+        self._restore(other._snapshot())
 
     def _consistent(self, fn):
+        # Note: if fn() merely returns False (fact not representable) this still
+        # counts as consistent; _refute relies on that to answer "unknown"
+        # rather than a wrong True/False.
         snap = self._snapshot()
         try:
             fn()
@@ -470,8 +557,17 @@ class Table:
         return {self._find(i) for i in ent.rel.get(name, ())}
 
     def _resolve(self, node, create=CREATE_NONE, top=True):
-        if node.name.startswith("d_"):
-            return [self._find(int(node.name[2:]))]
+        if (node.name.startswith("d_") and not node.children
+                and node.name[2:].isdigit()):
+            i = self._find(int(node.name[2:]))
+            if i not in self.table_entry_list:
+                # id from another table (e.g. a nested attitude table)
+                if create < CREATE_LINK:
+                    return []
+                self.table_entry_list[i] = TableEntry()
+                self.curr = max(self.curr, i + 1)
+                self._version += 1
+            return [i]
         if not node.children:
             for key, ent in self.table_entry_list.items():
                 if node in ent.entry:
@@ -547,7 +643,14 @@ class Table:
                 self.equate_id(p.attr[key], val)
             elif p.attr[key] != val:
                 raise Contradiction(key)
-        return self._find(keep)
+
+        keep = self._find(keep)
+        if keep in self._targets(keep, NE):
+            raise Contradiction("known to be different")
+        soft = self.table_entry_list[keep].rel.get(SOFT)
+        if soft:
+            soft -= {i for i in soft if self._find(i) == keep}
+        return keep
 
     # ------------------------------------------------------------------
     # facts
@@ -586,6 +689,9 @@ class Table:
             if eq.name in self.factive:
                 if not self._assert_expr(prop, True, create):
                     return False
+            if self.depth >= self.MAX_DEPTH:
+                return True          # too deeply nested: stop (avoids endless know-that-know-that)
+            prop = self._named(prop)
             ent = self.table_entry_list[self._find(who)]
             for name in [eq.name] + sorted(self._entailed(eq.name)):
                 if name not in ent.know:
@@ -655,7 +761,7 @@ class Table:
             ent = self.table_entry_list[self._find(who)]
             if eq.name not in ent.know:
                 return None
-            return ent.know[eq.name].question(eq.children[1])
+            return ent.know[eq.name].question(self._named(eq.children[1]))
 
         if eq.name == "equal" and len(eq.children) == 2:
             if self._is_rel(eq.children[0]) or self._is_rel(eq.children[1]):
@@ -711,7 +817,8 @@ class Table:
         return eq
 
     def _answers(self, body, env):
-        used = [v for v in VARS if v in env and v in self._expr_vars(body)]
+        body_vars = self._expr_vars(body)
+        used = [v for v in ALL_VARS if v in env and v in body_vars]
         lists = [self.find_id(env[v]) or [None] for v in used]
         out = []
         for combo in itertools.product(*lists):
@@ -754,6 +861,8 @@ class Table:
         return str(self)
 
     def _propagate(self):
+        # NOTE: product(ids, repeat=len(variables)) grows as n**k, so rules
+        # with many variables get slow on large tables.
         for _ in range(self.MAX_ROUNDS):
             self._apply_distinct()
             before = self._signature()
@@ -768,10 +877,12 @@ class Table:
         raise RuntimeError("rules did not reach a fixed point")
 
     def process_all_rule(self):
+        snap = self._snapshot()
         try:
             self._propagate()
             return []
         except Contradiction:
+            self._restore(snap)
             return None
 
     # ------------------------------------------------------------------
